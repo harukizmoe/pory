@@ -1,0 +1,8 @@
+# Rust 构建产物
+/target
+
+# AI 编程助手的工作目录：里面是会话记忆和草稿，不属于项目源码。
+# `.workbuddy-ai` 是指向 `.workbuddy` 的目录联接（两个客户端共用同一份内容），
+# 一并忽略 —— 免得 git 顺着联接走进去，也免得同一份内容在仓库里出现两遍。
+.workbuddy/
+.workbuddy-ai/

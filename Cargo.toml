@@ -1,0 +1,68 @@
+[package]
+name = "pory"
+version = "0.1.0"
+edition = "2021"
+# 包元数据用英文：README 是三语的（英文为主 + zh-CN + ja），但 description 与
+# keywords 只有一份，取通用语言。运行时提示与源码注释仍是中文。
+description = "A terminal translator with pluggable backends, chunk-level caching and automatic fallback"
+license = "MIT"
+repository = "https://github.com/harukizmoe/pory"
+readme = "README.md"
+keywords = ["translation", "translator", "cli", "i18n", "terminal"]
+categories = ["command-line-utilities"]
+
+[dependencies]
+# 命令行参数解析。derive 特性让我们用结构体 + 注解来定义参数，比手写解析清爽得多
+clap = { version = "4", features = ["derive", "wrap_help"] }
+
+# 异步运行时。网络请求是 IO 密集型，用 async 避免阻塞；tokio 是 Rust 生态的事实标准。
+# features 只要 "rt"（运行时）+ "macros"（#[tokio::main]）—— 刻意**不用 rt-multi-thread**：
+# pory 的请求是串行的，多线程没有收益，反而会让 async 里的 stderr 写入与主线程输出
+# 交错（实测出现过撕裂输出），详见 main.rs 的说明。
+#
+# "time" 是 2026-09-20 为等待动画加的：thinking 行要每 80 ms 走一帧，
+# 而 `tokio::time::interval` 必须有这个 feature。
+# 为什么不用「另起一个线程 + 原子停止标志」（那样不必加 feature）？
+# 因为本项目在「两个写者」上栽过 —— 见上面那条撕裂输出的教训。
+# select! 全程在同一条线程里轮询，**结构上不可能撕裂**。
+#
+# 实测这个 feature 花 **0 字节**：把它从 features 里去掉重新构建，二进制
+# 大小一模一样 —— 因为 reqwest 那条链本来就开着 tokio/time
+# （`cargo tree -e features -i tokio` 的启用方里能看到 reqwest）。
+# 那为什么还写出来？**写显式**：不写就是暗中依赖别人的 feature 选择，
+# 哪天 reqwest 换掉这个依赖，我们的动画会编译失败在很远的地方。
+tokio = { version = "1", features = ["rt", "macros", "time"] }
+
+# HTTP 客户端。用 rustls 而不是 native-tls —— 纯 Rust 实现，交叉编译到任何平台都不折腾
+reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls"] }
+
+# JSON 解析。serde 是 Rust 序列化生态的基石
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+
+# URL 编码。翻译文本里会有空格、换行、中文，必须正确编码才能塞进 query string
+urlencoding = "2"
+
+# 配置文件解析（TOML 格式，Rust 社区惯例）
+toml = "0.8"
+
+# 跨平台的用户配置目录定位（~/.config/pory/）
+directories = "5"
+
+# SHA-256 哈希。用来给缓存条目生成键 —— 为什么不用标准库的 DefaultHasher？
+# 因为它的输出不保证跨 Rust 版本稳定，而且只有 64 位、碰撞后会导致返回错误译文。
+# SHA-256 确定性好、无碰撞风险、键长度固定。
+sha2 = "0.10"
+
+# 错误处理。thiserror 让我们定义自己的错误类型，且自动实现 Display
+thiserror = "1"
+
+# 彩色输出。翻译结果用颜色区分原文/译文，终端里一眼看清
+owo-colors = "4"
+
+[profile.release]
+# 优化体积 + 速度。strip 去掉调试符号能显著减小二进制
+opt-level = 3
+lto = true
+codegen-units = 1
+strip = true
