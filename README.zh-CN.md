@@ -39,8 +39,11 @@ It's a nice day today
 ## 安装
 
 ```bash
-cargo install --git https://github.com/harukizmoe/pory
+cargo install --git https://github.com/harukizmoe/pory --locked
 ```
+
+`--locked` 让依赖固定在仓库 `Cargo.lock` 记录的版本上 —— 免得日后某个依赖发新版，把安装搞坏。
+
 
 或从源码构建：
 

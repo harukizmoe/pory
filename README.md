@@ -49,8 +49,12 @@ gives you nothing but the translation.
 ## Install
 
 ```bash
-cargo install --git https://github.com/harukizmoe/pory
+cargo install --git https://github.com/harukizmoe/pory --locked
 ```
+
+`--locked` pins the dependencies to the versions recorded in the repository's
+`Cargo.lock`, so a later release of some dependency cannot break your install.
+
 
 Or build from source:
 

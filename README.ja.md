@@ -46,8 +46,11 @@ It's a nice day today
 ## インストール
 
 ```bash
-cargo install --git https://github.com/harukizmoe/pory
+cargo install --git https://github.com/harukizmoe/pory --locked
 ```
+
+`--locked` は依存バージョンをリポジトリの `Cargo.lock` に記録されたものに固定します。将来どこかの依存が更新されてインストールが壊れるのを防ぐためです。
+
 
 ソースからビルドする場合：
 
