@@ -6,8 +6,10 @@
 
 # `.workbuddy-ai` 是指向 `.workbuddy` 的目录联接（两个客户端共用同一份内容），
 # 一并忽略 —— 免得同一个目录在仓库里出现两遍。
-# ⚠️ 两种写法都要留：带斜杠的模式只匹配「目录」，而联接在 git 眼里是一个条目
-# 而不是目录（`git status` 里显示为 `?? .workbuddy-ai` 而非 `.workbuddy-ai/`），
-# 所以 `.workbuddy-ai/` 匹配不上它 —— 实测过，只写带斜杠那条会漏。
+# ⚠️ 两种写法都要留 —— 实测行为**随 git 所在平台而变**：
+#   · WSL / Linux 的 git（经 `/mnt/d` 访问）把联接看成「条目」而不是目录
+#     （`git status` 显示 `?? .workbuddy-ai`，无尾斜杠）→ 只有**不带斜杠**的
+#     `.workbuddy-ai` 能匹配，`.workbuddy-ai/` 是静默失效的；
+#   · Windows 原生 git 把联接当目录 → 两种写法都能匹配。
 .workbuddy-ai
 .workbuddy-ai/
