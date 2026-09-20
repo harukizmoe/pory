@@ -1,0 +1,37 @@
+# Maintainer: harukizmoe <harukizmoe at gmail dot com>
+
+pkgname=pory-bin
+pkgver=0.1.0
+pkgrel=1
+pkgdesc="A terminal translator with pluggable backends, chunk-level caching and automatic fallback"
+arch=('x86_64')
+url="https://github.com/harukizmoe/pory"
+license=('MIT')
+
+# The released binary links against libc.so.6 and libgcc_s.so.1 only (verified with
+# `readelf -d`), and needs glibc >= 2.34, so gcc-libs is the whole dependency set.
+depends=('gcc-libs')
+
+# A "-bin" package is the same program as the source package, just delivered
+# prebuilt: it provides "pory" so dependents can use either, and conflicts with it
+# so the two can never be installed side by side.
+provides=('pory')
+conflicts=('pory')
+
+# Upstream already ships a stripped binary. Skipping the strip step keeps the
+# packaged file byte-identical to the released asset, so the published checksum
+# describes exactly what users get.
+options=('!strip')
+
+# The release asset has a version-independent name (so that a stable download URL
+# works for tools like cargo-binstall). It is renamed locally with $pkgver baked in
+# because makepkg caches downloads by filename: with a stable name, every version
+# bump would compare the new checksum against the previously cached file and fail.
+source=("pory-$pkgver-x86_64-unknown-linux-gnu.tar.gz::$url/releases/download/v$pkgver/pory-x86_64-unknown-linux-gnu.tar.gz")
+sha256sums=('0c6102846289fd914851d6c621c380c7302c53800831e98ab9d7dca898ed793b')
+
+package() {
+  install -Dm0755 "$srcdir/pory-x86_64-unknown-linux-gnu/pory" "$pkgdir/usr/bin/pory"
+  install -Dm0644 "$srcdir/pory-x86_64-unknown-linux-gnu/LICENSE" "$pkgdir/usr/share/licenses/$pkgname/LICENSE"
+  install -Dm0644 "$srcdir/pory-x86_64-unknown-linux-gnu/README.md" "$pkgdir/usr/share/doc/$pkgname/README.md"
+}
