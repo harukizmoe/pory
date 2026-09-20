@@ -18,10 +18,11 @@ depends=('gcc-libs')
 provides=('pory')
 conflicts=('pory')
 
-# Upstream already ships a stripped binary. Skipping the strip step keeps the
-# packaged file byte-identical to the released asset, so the published checksum
-# describes exactly what users get.
-options=('!strip')
+# Upstream already ships a stripped binary, so skipping strip keeps the packaged
+# file byte-identical to the released asset. !debug is for the same reason: there
+# are no symbols to extract, and the debug machinery would otherwise leave an
+# empty /usr/src/debug directory inside the package.
+options=('!strip' '!debug')
 
 # The release asset has a version-independent name (so that a stable download URL
 # works for tools like cargo-binstall). It is renamed locally with $pkgver baked in
