@@ -13,3 +13,13 @@
 #   · Windows 原生 git 把联接当目录 → 两种写法都能匹配。
 .workbuddy-ai
 .workbuddy-ai/
+
+# `packaging/` 本身是**手写的打包源码**（PKGBUILD + 发版说明），不是产物 —— 要跟踪。
+# 但它下面的 AUR 目录一旦被**就地** `makepkg`（而不是按 packaging/README.md 说的
+# 在 /tmp 里构建），就会在那里留下 3.6 MB 的二进制、下载的资产和一堆中间物。
+# 这几条只为挡这种情况，不影响 PKGBUILD 本身。
+/packaging/aur/*/pkg/
+/packaging/aur/*/src/
+/packaging/aur/*/.SRCINFO
+/packaging/aur/*/*.pkg.tar.*
+/packaging/aur/*/*.tar.gz
