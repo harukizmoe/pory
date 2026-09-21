@@ -14,32 +14,45 @@
 
 ```console
 $ pory "今天天气不错"
-It's a nice day today
-◈ zh-CN ⇄ en · mymemory · 1 block · cache 0/1
+The weather is nice today
+◈ zh-CN ⇄ en · msedge · 1 block · cache 0/1 · 0.5s
 ```
 
 この `◈` の行が唯一の装飾です。言語の組、使ったバックエンド、分割数、
-そのうち何件がキャッシュから来たのか —— それが分かります。
+そのうち何件がキャッシュから来たのか、そして呼び出し全体にかかった時間 —— それが分かります。
 そしてこれは **stderr** に出るので、stdout をリダイレクトすれば翻訳文だけが残ります。
 
 ## 特徴
 
-- **設定不要ですぐ使える** —— 既定のバックエンド MyMemory は API キー不要で、
-  中国本土からも直接つながります
-- **バックエンドを差し替えられる** —— MyMemory / Google / OpenAI 互換 API
-  （DeepSeek、Kimi、Zhipu、ローカルの Ollama など）。設定 1 行で切り替わります
-- **自動フォールバック** —— キー未設定・上限超過・タイムアウトのいずれでも、
+- **2 つのモードを 1 つのオプションで** —— `ai`（大規模モデル：品質最高、文脈を理解）と
+  `traditional`（キー不要の機械翻訳：最速）。`ai` モードでは伝統的なチェーンが
+  保険として後ろに付くので、キーがなくてもレート制限でも「動かない」ではなく「劣化」で済みます。
+  `-b ai` / `-b traditional` で呼び出しごとに切り替え
+- **設定不要ですぐ使える** —— 設定ファイルが一切なくても動きます。
+  伝統チェーンの先頭は `msedge` で、API キー不要・中国本土からも直結できます
+- **バックエンドを差し替えられる** —— キー不要の伝統バックエンド 4 種に加え、
+  OpenAI 互換 API（DeepSeek、Kimi、Zhipu、SiliconFlow、ローカルの Ollama など）。
+  1 つのプロバイダに複数のモデルを載せられます。主力モデルが落ちたら、
+  同じプロバイダの控えを先に試し、それから次のプロバイダへ
+- **自動フォールバックは必ず見える** —— キー未設定・上限超過・タイムアウトのいずれでも、
   次のバックエンドに自動で切り替わり、翻訳は止まりません。何が起きたかは警告で、
   実際に使われた経路はフッターで分かります —— 黙ってフォールバックすると、
   LLM を使っているつもりが実は機械翻訳だった、ということになるからです
+- **AI の思考スイッチ** —— `thinking = false` でハイブリッド推論モデルの思考段階を切ります。
+  SiliconFlow での実測：Qwen3-8B が 1 文あたり 22.9 秒 → 1.4 秒、品質はそのまま
 - **第一言語 / 第二言語の相互翻訳** —— 母語と第二言語を設定しておくと、
   auto モードでは母語で書かれたテキストをそのまま返さず、第二言語へ訳します
-- **パイプ向き** —— `cat notes.md | pory -t en`。色とアニメーションは
+- **シェル統合** —— `pory --init-shell fish` で短縮名（`pr` → `pory`）と補完を導入。
+  `bash` / `zsh` にも対応
+- **きれいなアンインストール** —— `pory --uninstall` は追加したもの
+  （補完ファイル、rc に追記した行、キャッシュ）をすべて片付けます。
+  確認を求めるのは設定ファイルだけ
+- **パイプ向き** —— `cat notes.md | pory -t en`。色・フッター・アニメーションは
   そのストリームが本物のターミナルのときだけ出るので、
   パイプ・CI・リダイレクトでは 1 バイトも余計に書きません
 - **長文の賢い分割** —— 段落 → 文 → 強制分割の三段階で、語の途中で切れません
 - **ブロック単位のキャッシュ** —— 先週訳した一文は今日は無料。ヒットは約 4 ms
-- **小さくて速い** —— 単一の静的バイナリ（約 3.6 MB）、起動約 3 ms、実行時依存なし
+- **小さくて速い** —— 単一の静的バイナリ（約 3.7 MB）、起動約 3 ms、実行時依存なし
 - **Pure Rust + rustls** —— OpenSSL に依存しないので、musl や ARM への
   クロスコンパイルでシステムライブラリに悩まされません
 
@@ -50,7 +63,6 @@ cargo install --git https://github.com/harukizmoe/pory --locked
 ```
 
 `--locked` は依存バージョンをリポジトリの `Cargo.lock` に記録されたものに固定します。将来どこかの依存が更新されてインストールが壊れるのを防ぐためです。
-
 
 ソースからビルドする場合：
 
@@ -63,13 +75,14 @@ cargo build --release        # target/release/pory に生成されます
 ## クイックスタート
 
 ```bash
-pory "今天天气不错"            # -> It's a nice day today
-pory "hello world"             # -> 你好世界          （auto：英語を入れると中国語が出る）
+pory "今天天气不错"            # -> The weather is nice today
+pory "hello world"             # -> 你好，世界        （auto：英語を入れると中国語が出る）
 pory "Good morning" -t ja      # -> おはようございます
 pory "你好，世界" -t en         # -> Hello, world.
 pory "こんにちは" -f ja -t zh   # 原文の言語と訳先を明示
 cat notes.md | pory -t en      # 標準入力から読む
 pory "hello" --plain           # 翻訳文だけ（フッターもアニメーションもなし）
+pory -b traditional "hello"    # AI を完全に飛ばして機械翻訳を使う
 ```
 
 既定値は `primary = "zh"`、`secondary = "en"` なので、最初の 2 つは
@@ -86,34 +99,73 @@ Usage: pory [OPTIONS] [TEXT]
 | `[TEXT]` | 翻訳するテキスト。省略すると stdin から読みます（パイプ対応） |
 | `-t, --target <LANG>` | 訳先の言語（`zh` / `en` / `ja` など） |
 | `-f, --from <LANG>` | 原文の言語。既定は自動判定 |
-| `-b, --backend <NAME>` | `mymemory` / `google` / `ai`。**意味が 2 通りあります（下記）** |
+| `-b, --backend <MODE>` | `ai` / `traditional`。**意味が 2 通りあります（下記）** |
 | `--plain` | 翻訳文のみ：色なし、フッターなし、アニメーションなし |
 | `--no-cache` | 今回キャッシュを使わない（読み書き両方しない） |
 | `--refresh` | 既存のキャッシュを無視して翻訳し直し、キャッシュを更新する |
 | `--clear-cache` | 翻訳キャッシュを消して終了 |
-| `--init` | サンプルの設定ファイルを書き出して終了 |
+| `--init` | サンプルの設定ファイルを書き出して終了（既存のものは上書きしません） |
+| `--init-shell <SHELL>` | シェル統合を導入：`fish` / `bash` / `zsh` |
+| `--print` | `--init-shell` と併用：導入せずスクリプトだけを出力 |
+| `--uninstall` | pory がこのシステムに加えたものをすべて消して終了 |
 
 ### `-b` の 2 つの意味
 
 どちらになるかは**入力があるかどうか**で決まります：
 
 ```bash
-pory -b google "text"           # 今回だけ google を使う
-echo "text" | pory -b google    # 同じ —— パイプ入力も「今回だけ」に含まれます
-pory -b google                  # テキストなし → 設定に書き込み、以後ずっとそれを使う
+pory -b traditional "text"           # 今回だけ伝統チェーンを使う
+echo "text" | pory -b traditional    # 同じ —— パイプ入力も「今回だけ」に含まれます
+pory -b traditional                  # テキストなし → 設定に書き込み、以後ずっとそれを使う
 ```
 
-最後の形は `✓ 已把默认后端设为 google` と表示して終了し、設定ファイルの
-`backend` の行**だけ**を書き換えます（コメントも他の設定もそのまま）。
-戻すときは `pory -b mymemory`。
+最後の形は `✓ 已把默认翻译模式设为 traditional` と表示して終了し、設定ファイルの
+`mode` の行**だけ**を書き換えます（コメントも他の設定もそのまま）。
 
 `-b` を他のオプションと一緒に使い、かつテキストがない場合
-（`pory -b google -t ja`）は、設定を勝手に書き換えず使い方のヒントを出します ——
+（`pory -b ai -t ja`）は、設定を勝手に書き換えず使い方のヒントを出します ——
 そのほとんどはテキストを書き忘れただけだからです。
 
 ### 対応言語
 
-`zh` `zh-tw` `en` `ja` `ko` `fr` `de` `es` `ru` `it` `pt` `ar` `th` `vi`
+`zh` `zh-cn` `zh-tw` `en` `ja` `ko` `fr` `de` `es` `ru` `it` `pt` `ar` `th` `vi`
+
+### シェル統合
+
+```bash
+pory --init-shell fish     # -> ~/.config/fish/completions/pory.fish
+pory --init-shell bash     # -> 補完ファイル + ~/.bashrc に `alias pr=pory` を追記
+pory --init-shell zsh      # -> スクリプトを出力 + ~/.zshrc に同じエイリアスを追記
+```
+
+得られるものは 2 つ：短縮名（`pr` + スペースで `pory` に展開）と補完
+（言語・モード・オプション）。変更はすべて冪等で目印付きなので、
+`pory --uninstall` でまとめて元に戻せます。pory が書いたのではないファイルは
+決して上書きしません。
+
+知っておくとよい点が 2 つあります：
+
+- `pr` は POSIX のページャ `/usr/bin/pr` と同じ名前です。対話シェルでは `pory` に展開されます。
+  本当の `pr` を使いたいときは `\pr` か `command pr` と打ってください
+- zsh には補完ファイルの標準的な置き場所がありません（`$fpath` の設定次第です）。
+  そのため zsh ではスクリプトを出力し、置き場所を案内するだけにしています。
+  zsh の補完は仕様どおりに書いていますが**実機での検証は未実施**です
+  （fish と bash は実際に動かして確認済み）
+
+### アンインストール
+
+```bash
+pory --uninstall
+```
+
+補完ファイル、`~/.bashrc` / `~/.zshrc` に追記した行、翻訳キャッシュを消します ——
+これらは問い合わせません。どれも再生成できるものだからです。
+設定ファイルは別扱いです：API キーや調整した設定が入っている可能性があるので、
+消す前に一度だけ確認します（`[y/N]`）。
+非対話環境（スクリプトから実行）では常に設定を残します。
+
+バイナリ自体は削除しません（cargo やパッケージマネージャが管理している可能性があるため）。
+削除方法はコマンドが案内します。
 
 ## 設定
 
@@ -121,24 +173,27 @@ pory -b google                  # テキストなし → 設定に書き込み�
 `~/.config/pory/config.toml`（Windows では `%APPDATA%\pory\`）を生成します：
 
 ```toml
-backend = "mymemory"
-fallback = ["mymemory"]     # 主バックエンドが失敗したときに順に試す
+mode = "ai"                 # ai | traditional
 primary = "zh"              # 第一言語：-t を指定しないときの訳先
 secondary = "en"            # 第二言語："" にすると相互翻訳を無効化
 source = "auto"
 cache = true                # false は毎回 --no-cache を付けるのと同じ
 
-# MyMemory：メールアドレスを書くと無料枠が増えます
-# mymemory_email = "you@example.com"
-
-# Google：自前のプロキシを指定できます
-# google_endpoint = "https://your-worker.workers.dev/translate_a/single"
-
-# AI バックエンド（OpenAI 互換）
+# ── AI プロバイダ（OpenAI 互換、複数設定できます）──
 [ai]
-base_url = "https://api.deepseek.com/v1"
+order = ["zhipu", "siliconflow"]   # この順に試します。api_key のないものは自動でスキップ
+
+[ai.siliconflow]
+base_url = "https://api.siliconflow.cn/v1"
 api_key = ""
-model = "deepseek-chat"
+models = ["tencent/Hunyuan-MT-7B", "Qwen/Qwen3-8B"]
+thinking = false            # 任意：リクエストに enable_thinking = false を付ける
+
+# ── 伝統的な機械翻訳（キー不要、常に利用可能）──
+# order は mode = "traditional" のチェーン順と、mode = "ai" で AI の後ろに
+# 繋がる保険の順序の両方を決めます。
+[traditional]
+order = ["msedge", "transmart", "mymemory", "google"]
 ```
 
 設定ファイルがなくても組み込みの既定値で動きます —— **それはエラーではありません**。
@@ -161,24 +216,38 @@ pory "你好，世界"       # 原文がすでに中国語 → 英語へ
   原文と訳先が同じならリクエストを出さずその場で返します
 - **`secondary` を空にすれば相互翻訳は無効**
 
-余分なコストもありません。追加のリクエストが要るのは**同じ言語に当たったとき**だけです。
+これはただで手に入る魔法ではありません —— **各バックエンドが自分で処理する**必要があり、
+プロトコルごとにやり方が違います：
+
+- **MyMemory**：サーバが `translatedText: null` と検出言語を返すので、
+  pory は控えの訳先に対してもう 1 回リクエストします
+- **AI バックエンド**：プロンプトに書き込みます ——「X に翻訳せよ。原文がすでに X なら
+  代わりに Y に翻訳せよ」。往復 1 回で済み、検出用のリクエストは不要です
+- **msedge / transmart / google**：放っておくと文字通り「中国語を中国語に翻訳」し、
+  原文をそのまま訳文として返します（実測）。pory はサーバが申告した言語か、
+  「訳文が原文と完全に一致する」ことからそれを検出し、控えの訳先で再送します ——
+  auto モードのときに限ります
 
 ## バックエンド
 
 | バックエンド | API キー | 中国本土から直結 | 説明 |
 |---|---|---|---|
-| `mymemory` | 不要 | 可 | 既定。1 日 1000 回、1 回 400 文字まで |
+| `msedge` | 不要 | 可 | Microsoft の Edge エンドポイント。既定の伝統チェーンの先頭 |
+| `transmart` | 不要 | 可 | Tencent の対話型翻訳。実測で最速（約 0.2 秒） |
+| `mymemory` | 不要 | 可 | 1 日 1000 回、1 回 400 文字まで。メールを書くと枠が増えます |
 | `google` | 不要 | プロキシが必要 | 品質は良いが非公式エンドポイント。IP 単位で制限される |
 | `ai` | 必要 | サービス次第 | 品質は最高、文脈を理解し書式も保つ。機械翻訳より遅く、有料 |
 
-AI バックエンドは 1 つ書くだけで多くのサービスに対応します。
-**OpenAI 互換プロトコル**なので、`base_url` と `model` を変えるだけです：
+AI プロバイダは `[ai.名前]` の 1 セクションで、複数のモデルを持てます。
+チェーンは「プロバイダ:モデル」に展開されるので、失敗時にどのモデルかを名指しできます。
+プロトコルは **OpenAI 互換** —— `base_url` と `models` を変えるだけです：
 
 | サービス | `base_url` |
 |---|---|
 | DeepSeek | `https://api.deepseek.com/v1` |
 | Kimi | `https://api.moonshot.cn/v1` |
 | Zhipu | `https://open.bigmodel.cn/api/paas/v4` |
+| SiliconFlow | `https://api.siliconflow.cn/v1` |
 | ローカル Ollama | `http://localhost:11434/v1` |
 
 すべてのバックエンドに **30 秒のリクエストタイムアウト**があります。
@@ -190,17 +259,20 @@ AI バックエンドは 1 つ書くだけで多くのサービスに対応し�
 ## 出力
 
 ```
-↳ hello world                                  ← 入力のエコー（パイプ・ファイル入力のときだけ）
-你好世界                                        ← 翻訳文（stdout、ターミナルでは太字）
-◈ zh-CN ⇄ en · mymemory · 1 block · cache 0/1   ← フッター（stderr、常に画面下部）
+↳ hello world                                       ← 入力のエコー（パイプ・ファイル入力のときだけ）
+你好世界                                             ← 翻訳文（stdout、ターミナルでは太字）
+◈ zh-CN ⇄ en · msedge · 10 blocks · cache 9/10 · 1.0s   ← フッター（stderr、常に画面下部）
 ```
 
 フッターはこのインターフェースで一番正直な部分です：
 
 - `⇄` は向きが判定結果で決まること、`›` は向きが確定していることを表します
-- `ai → mymemory` は**フォールバックが起きた**印で、行全体が琥珀色になります
-- `3 blocks` は実際の分割数。リクエストを出す前にローカルで確定しています
-- `cache 3/3` は「3 ブロックすべてキャッシュから」
+- `bad:m → sf:tencent/Hunyuan-MT-7B` は**フォールバックが起きた**印で、行全体が琥珀色になります
+- `10 blocks` は実際の分割数。リクエストを出す前にローカルで確定しています
+- `cache 9/10` は「10 ブロックのうち 9 つがキャッシュから」
+- `1.0s` は呼び出し全体の実測時間で、分割とキャッシュ書き込みも含みます。
+  キャッシュヒットは `0.0s` —— これは「一瞬」を正直に報告したもので、
+  丸めの誤差ではありません
 
 リクエスト中は点字の thinking スピナーと**実測**の経過秒数が出ます ——
 進捗バーは作りません。ネットワークリクエストにどれだけかかるか、
@@ -212,8 +284,9 @@ AI バックエンドは 1 つ書くだけで多くのサービスに対応し�
 
 キャッシュが SQLite ではなく JSON な理由、キャッシュキーが SHA-256 な理由、
 tokio がシングルスレッドな理由、装飾が stderr に出る理由、
-そして「新しいファイル 1 つ + match 1 行」でバックエンドを足す方法：
-[docs/design.md](docs/design.md) *（現在は中国語のみ）*。
+そして 2 モードのルーティングの設計：
+[docs/design.md](docs/design.md) と [docs/mode-routing-design.md](docs/mode-routing-design.md)
+*（現在は中国語のみ）*。
 
 ## コントリビュート
 
