@@ -62,12 +62,20 @@ impl Ai {
     /// - 明确「只输出译文」，否则模型爱加「以下是翻译：」这类废话
     /// - 明确「保持格式」，否则 Markdown 会被破坏
     /// - 用自然语言描述语种，而不是扔 "zh-CN" 这种代码
+    /// - **用户正文一律包在 `<text>` 标签里**：2026-09-22 实测，不带标签时
+    ///   以 `Translate ...` 开头的输入会让模型把系统指令和正文混起来，
+    ///   直接把「要求 1-4」复述出来当译文（Hunyuan-MT-7B 稳定复现）
     ///
     /// **互翻场景**（from=auto 且 `to_if_same` 存在）：AI 没有语言检测能力，
     /// 「请把中文翻译成中文」会让模型把原句换个说法当译文返回（实测
     /// Hunyuan-MT-7B 就这么干 —— 这是 2026-09-21 修掉的互翻失效 bug）。
-    /// 解法是把判定交给模型：**「翻成 X；若原文已经是 X，则改译成 Y」**，
-    /// 一次请求完成检测 + 翻译，不多花一次往返（轻量铁律）。
+    /// 解法是把判定交给模型，但**写法必须是两条并列规则，不能用分号串成一句**：
+    /// 2026-09-22 实测，「翻译成 A；若原文已是 A 则改译成 B」会让模型对
+    /// **英文输入**只做润色（`The weather is nice...` → 加个逗号原样返回），
+    /// 也就是「翻成主语言」这条路径整个失效 —— 而样本全是中文的测评
+    /// 恰好只覆盖了另一条路径，所以一直没暴露。
+    /// 拆成「先判断，再按两条规则走」之后，两个方向都稳定。
+    ///
     /// 注意 `to_if_same` 本身就在缓存键里，所以这种 prompt 的产出不会
     /// 和普通请求互相污染。
     fn build_prompt(req: &Request) -> String {
@@ -79,25 +87,73 @@ impl Ai {
 
         let to = req.to.to_name();
 
-        if req.from.is_auto() {
-            // 互翻开启时把「原文已是目标语」的处理写进指令（见上，修复中翻中）
+        let head = if req.from.is_auto() {
+            // 互翻开启：把两种语言**抽象成 A / B 两个符号**再谈规则。
+            //
+            // 2026-09-22 实测（Hunyuan-MT-7B，每格 2 次采样）：
+            //   旧写法「翻译成简体中文；若原文已经就是简体中文，则改译成英语」→ 英文输入 0/6
+            //   本写法（A/B 命名）→ 英文输入 6/6、中文输入 2/2
+            // 原因推测：旧写法里「简体中文」同时扮演「目标」和「条件」，模型容易
+            // 把它读成「输出语言 = 简体中文」的对立面，于是对英文输入直接润色回英文；
+            // 抽成符号后两个角色不再撞名。别改回带分号的直觉写法。
             if let Some(alt) = &req.to_if_same {
                 let alt = alt.to_name();
-                return format!(
-                    "你是一个翻译引擎。请把用户给出的文本翻译成{to}；\
-                     若原文已经就是{to}，则改译成{alt}。{REQUIREMENTS}"
-                );
+                format!(
+                    "你是一个翻译引擎。设 A = {to}，B = {alt}。\n\
+                     把 <text> 标签里的内容翻译成 A；但如果内容已经是 A，则翻译成 B。\n\
+                     译文本身不要带 <text> 标签。"
+                )
+            } else {
+                format!(
+                    "你是一个翻译引擎。请把 <text> 标签里的内容翻译成{to}。\
+                     译文本身不要带 <text> 标签。"
+                )
             }
-            format!(
-                "你是一个翻译引擎。请把用户给出的文本翻译成{to}。{REQUIREMENTS}"
-            )
         } else {
             let from = req.from.to_name();
             format!(
-                "你是一个翻译引擎。请把用户给出的{from}文本翻译成{to}。{REQUIREMENTS}"
+                "你是一个翻译引擎。请把 <text> 标签里的{from}内容翻译成{to}。\
+                 译文本身不要带 <text> 标签。"
             )
-        }
+        };
+
+        format!("{head}{REQUIREMENTS}")
     }
+}
+
+/// 判断译文是不是**在复述我们的指令**，而不是翻译。
+///
+/// 2026-09-22 加：模型（实测 Hunyuan-MT-7B）在指令与正文混淆时，会把
+/// prompt 里的「要求 1-4」当成要处理的内容，逐条吐出来 —— 这是最恶劣的
+/// 一种失败：**看着像正经输出，其实是彻底的垃圾**。
+///
+/// 判据刻意收窄：只认我们 prompt 里的独特措辞（中文原文 + 模型转写成英文
+/// 后的常见说法），且**要命中两条以上**才算 —— 单条可能是用户真的在翻译
+/// 一份提示词文档，那不该误伤。
+///
+/// 命中后由调用方返回错误（而不是把垃圾当译文交出去），于是回退链继续走、
+/// 垃圾也不会进缓存。
+fn looks_like_prompt_echo(text: &str) -> bool {
+    const MARKERS: &[&str] = &[
+        // prompt 的中文原文措辞
+        "只输出译文本身",
+        "严格保留原文的换行",
+        "专有名词保持原样",
+        "保持原文的语气和风格",
+        "不要写「翻译如下」",
+        // 模型把指令转写成英文后的常见说法
+        "only output the translated text",
+        "strictly maintain the original text",
+        "strictly preserve the original text",
+        "proper nouns should remain",
+        "preserve the original text",
+    ];
+    let lower = text.to_lowercase();
+    let hits = MARKERS
+        .iter()
+        .filter(|m| lower.contains(&m.to_lowercase()))
+        .count();
+    hits >= 2
 }
 
 /// OpenAI 兼容协议的请求体（只声明我们用得到的字段）
@@ -176,6 +232,8 @@ impl Ai {
     async fn do_translate(&self, req: Request) -> Result<String> {
         let url = format!("{}/chat/completions", self.base_url);
         let prompt = Self::build_prompt(&req);
+        // 正文包进 <text> 标签，与 prompt 里的说法对应（见 build_prompt 的说明）
+        let user_content = format!("<text>{}</text>", req.text);
 
         let body = ChatRequest {
             model: &self.model,
@@ -186,7 +244,7 @@ impl Ai {
                 },
                 Message {
                     role: "user",
-                    content: &req.text,
+                    content: &user_content,
                 },
             ],
             temperature: 0.3,
@@ -220,13 +278,25 @@ impl Ai {
             .await
             .map_err(|e| PoryError::Parse(format!("AI 响应结构异常：{e}")))?;
 
-        parsed
+        let content = parsed
             .choices
             .into_iter()
             .next()
             .map(|c| c.message.content.trim().to_string())
             .filter(|s| !s.is_empty())
-            .ok_or_else(|| PoryError::Backend("AI 后端返回了空回复".into()))
+            .ok_or_else(|| PoryError::Backend("AI 后端返回了空回复".into()))?;
+
+        // 复述指令 = 彻底的垃圾，宁可判失败让回退链继续，也别当译文交出去
+        // （返回 Err 还顺带保证它不会进缓存）
+        if looks_like_prompt_echo(&content) {
+            return Err(PoryError::Backend(format!(
+                "{} 复述了翻译指令而不是翻译正文（已判为失败）。该模型的指令跟随不稳定，\
+                 可考虑换一个模型，或在配置里关掉互翻（secondary = \"\"）",
+                self.name
+            )));
+        }
+
+        Ok(content)
     }
 }
 
@@ -244,21 +314,49 @@ mod tests {
         }
     }
 
-    /// 互翻场景：备用语言必须写进指令 —— 这是「中翻中」bug 的守门测试。
-    /// AI 没有检测能力，不写明「若原文已是 X 则改译 Y」就会照原样翻。
+    /// 互翻场景：两个方向都必须写进指令 —— 这是「中翻中」bug 的守门测试。
+    /// AI 没有检测能力，不写明「若原文已是 A 则改译 B」就会照原样翻。
     #[test]
-    fn 互翻时_prompt_写明备用语言() {
+    fn 互翻时_prompt_写明两个方向() {
         let p = Ai::build_prompt(&req("auto", "zh-CN", Some("en")));
-        assert!(p.contains("翻译成简体中文"), "{p}");
-        assert!(p.contains("若原文已经就是简体中文"), "{p}");
-        assert!(p.contains("改译成英语"), "{p}");
+        assert!(p.contains("设 A = 简体中文，B = 英语"), "{p}");
+        assert!(p.contains("翻译成 A"), "{p}");
+        assert!(p.contains("如果内容已经是 A，则翻译成 B"), "{p}");
+    }
+
+    /// **防回归**：两种语言必须先抽象成 A / B 再谈规则。
+    /// 2026-09-22 实测：把语言名直接塞进条件句（「翻译成简体中文；若原文已经
+    /// 就是简体中文，则改译成英语」）会让模型对**英文输入**只做润色，0/6 全败；
+    /// 改成 A/B 命名后 6/6 通过。别退回旧写法。
+    #[test]
+    fn 互翻指令不把语言名塞进条件句() {
+        let p = Ai::build_prompt(&req("auto", "zh-CN", Some("en")));
+        assert!(
+            !p.contains("翻译成简体中文；"),
+            "退回旧写法会让英文输入失效：{p}"
+        );
+        // A/B 的定义必须出现在规则之前
+        let def = p.find("设 A =").expect("缺 A/B 定义");
+        let rule = p.find("翻译成 A").expect("缺规则");
+        assert!(def < rule, "定义要在规则之前：{p}");
+    }
+
+    /// 正文必须包在 `<text>` 标签里 —— 不带标签时以 "Translate ..." 开头的
+    /// 输入会被模型当成指令，直接把「要求」条目复述出来
+    #[test]
+    fn prompt_要求正文包在_text_标签里() {
+        for (from, alt) in [("auto", Some("en")), ("auto", None), ("zh-CN", None)] {
+            let p = Ai::build_prompt(&req(from, "en", alt));
+            assert!(p.contains("<text>"), "{p}");
+            assert!(p.contains("不要带 <text> 标签"), "{p}");
+        }
     }
 
     /// 未开启互翻（to_if_same 为空）时不提备用语言 —— prompt 不变多东西
     #[test]
     fn 非互翻的_auto_不提备用语言() {
         let p = Ai::build_prompt(&req("auto", "en", None));
-        assert!(!p.contains("若原文已经就是"), "{p}");
+        assert!(!p.contains("设 A ="), "{p}");
         assert!(p.contains("翻译成英语"), "{p}");
     }
 
@@ -266,7 +364,33 @@ mod tests {
     #[test]
     fn 显式源语言的_prompt_带源语种() {
         let p = Ai::build_prompt(&req("zh-CN", "en", None));
-        assert!(p.contains("把用户给出的简体中文文本翻译成英语"), "{p}");
+        assert!(p.contains("把 <text> 标签里的简体中文内容翻译成英语"), "{p}");
+    }
+
+    /// 复述指令的判定：要命中两条以上才算，避免误伤「正在翻译一份提示词文档」
+    #[test]
+    fn 复述指令的译文会被判失败() {
+        // 用户报的那种（模型把指令转写成英文后逐条吐出）
+        let echo_en = "Requirement:\n\
+            1. Only output the translated text itself; no explanations, no quotes, and no phrases like \"Translation as follows\".\n\
+            2. Strictly maintain the original text's line breaks, indentation, Markdown formatting, code blocks, and placeholders.";
+        assert!(looks_like_prompt_echo(echo_en));
+
+        // 中文原文照搬
+        assert!(looks_like_prompt_echo(
+            "要求：1. 只输出译文本身，不要任何解释 2. 严格保留原文的换行、缩进"
+        ));
+
+        // 正常译文不误判
+        assert!(!looks_like_prompt_echo(
+            "一款终端翻译器：开箱即用，也可以接上你自己选的 AI。"
+        ));
+        assert!(!looks_like_prompt_echo("The terminal is quiet."));
+
+        // 只命中一条 → 不算（可能是用户在翻译提示词文档）
+        assert!(!looks_like_prompt_echo(
+            "这份提示词要求：只输出译文本身。"
+        ));
     }
 
     /// 思考开关进缓存键：三态必须产出三个不同的键后缀，

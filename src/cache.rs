@@ -42,7 +42,11 @@ const MAX_ENTRIES: usize = 5000;
 /// v3 → v4：msedge / transmart / google 三家传统后端补上 `to_if_same` 处理
 /// （此前它们对「中文进、目标也是中文」的请求**原样返回原文**，却把原文当译文
 /// 写进了缓存）。旧缓存里同样存着「中译中」的坏结果，必须整体作废。
-const FORMAT_VERSION: u32 = 4;
+///
+/// v4 → v5：AI 后端的 prompt 重写（互翻改成两条并列规则 + 正文包进 `<text>` 标签）。
+/// 旧 prompt 会让模型对**英文输入**只做润色（原文退回）甚至复述指令 ——
+/// 这些垃圾结果已经进了缓存，同样按铁律整体作废。
+const FORMAT_VERSION: u32 = 5;
 
 /// 单条缓存记录
 #[derive(Debug, Clone, Serialize, Deserialize)]

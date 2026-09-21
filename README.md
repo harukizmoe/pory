@@ -224,8 +224,9 @@ protocol:
 
 - **MyMemory** reports `translatedText: null` plus a detected language; pory issues one
   extra request against the secondary target.
-- **AI backends** get it in the prompt: *translate into X; if the text is already X,
-  translate into Y instead* — one round trip, no detection call.
+- **AI backends** get both directions in a single prompt — the two languages are named
+  `A` and `B` first, so the model cannot confuse the target with the condition. One round
+  trip, no detection call.
 - **msedge / transmart / google** just translate "Chinese into Chinese" and hand back the
   original if you let them (measured). pory detects that from the reported language or from
   the translation being identical to the input, and re-issues the request against the
