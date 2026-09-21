@@ -1,6 +1,7 @@
 # Pory
 
-**Translate text right in your terminal — no API key, no browser, no copy-paste.**
+**Translate text right in your terminal — key-free out of the box, and any AI you plug in.
+No browser, no copy-paste.**
 
 `pory` is a small command-line translator for people who live in a shell. It works out of
 the box, remembers what it has already translated, and tells you honestly which backend
