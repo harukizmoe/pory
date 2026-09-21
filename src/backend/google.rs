@@ -15,7 +15,9 @@
 //! 返回：[[["译文","原文",null,null,10]],null,"zh-CN",...]
 //!      译文是 res[0] 里所有片段的 [0] 拼接。
 
-use crate::backend::{http_client, net_err, Backend, Request};
+use crate::backend::{
+    http_client, looks_untranslated, net_err, same_primary_language, Backend, Request,
+};
 use crate::error::{PoryError, Result};
 
 const ENDPOINT: &str = "https://translate.googleapis.com/translate_a/single";
@@ -63,12 +65,52 @@ impl Google {
             req.from.code().to_string()
         };
 
+        let tl = req.to.code().to_string();
+
+        // 源语言明确且与目标同语种 → 本地判掉，不必打扰服务器
+        // （与 mymemory 同一条纪律：能本地判断的别问服务器）
+        if !req.from.is_auto() && same_primary_language(req.from.code(), &tl) {
+            eprintln!("⚠ 源语言与目标语言相同（{}），原样返回", req.from.code());
+            return Ok(req.text.clone());
+        }
+
+        let (text, detected) = self.fetch(&req.text, &sl, &tl).await?;
+
+        // ── auto 模式下撞上「原文已是目标语言」→ 换向 ──
+        // 未在本机实测（国内 429），但同族的免 Key 端点（msedge / transmart）
+        // 都实测「不换向、原样返回」，所以按同样口径处理：
+        // 检测码与目标同主语言，或译文与原文完全一致时就换向。
+        let same = detected
+            .as_deref()
+            .is_some_and(|d| same_primary_language(d, &tl))
+            || looks_untranslated(&text, &req.text);
+        if req.from.is_auto() && same {
+            if let Some(alt) = &req.to_if_same {
+                let (swapped, _) = self.fetch(&req.text, "auto", alt.code()).await?;
+                return Ok(swapped);
+            }
+            eprintln!("⚠ 原文已经是目标语言，原样返回");
+            return Ok(req.text.clone());
+        }
+
+        Ok(text)
+    }
+
+    /// 发一次请求，返回 `(译文, 检测到的源语言)`。
+    ///
+    /// 抽出来是因为「换向」要再发一次、只换目标语言；收发逻辑只该有一份。
+    async fn fetch(
+        &self,
+        text: &str,
+        sl: &str,
+        tl: &str,
+    ) -> Result<(String, Option<String>)> {
         let url = format!(
             "{}?client=gtx&dt=t&sl={}&tl={}&q={}",
             self.endpoint,
-            urlencoding::encode(&sl),
-            urlencoding::encode(req.to.code()),
-            urlencoding::encode(&req.text),
+            urlencoding::encode(sl),
+            urlencoding::encode(tl),
+            urlencoding::encode(text),
         );
 
         // 经统一的构造函数发请求，才有超时兜底（见 backend/mod.rs 的说明）。
@@ -116,6 +158,12 @@ impl Google {
             return Err(PoryError::Backend("Google 返回了空译文".into()));
         }
 
-        Ok(out)
+        // res[2] 是检测到的源语言码（如 "zh-CN"）：结构注释里那个 `null,"zh-CN"`
+        let detected = json
+            .get(2)
+            .and_then(|v| v.as_str())
+            .map(|s| s.to_string());
+
+        Ok((out, detected))
     }
 }

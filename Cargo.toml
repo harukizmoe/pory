@@ -1,6 +1,6 @@
 [package]
 name = "pory"
-version = "0.1.0"
+version = "0.2.0"
 edition = "2021"
 # 包元数据用英文：README 是三语的（英文为主 + zh-CN + ja），但 description 与
 # keywords 只有一份，取通用语言。运行时提示与源码注释仍是中文。

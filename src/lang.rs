@@ -39,6 +39,13 @@ const SUPPORTED: &[(&str, &str)] = &[
     ("vi", "vi"),
 ];
 
+/// 所有可用的语种别名（`--shell` 生成的补全脚本用）。
+///
+/// 与 `SUPPORTED` 同源 —— 补全候选和解析器认的别名永远不会漂移。
+pub fn aliases() -> Vec<&'static str> {
+    SUPPORTED.iter().map(|(a, _)| *a).collect()
+}
+
 impl Lang {
     /// 从用户输入构造语言标签。
     ///
@@ -87,6 +94,20 @@ impl Lang {
             .next()
             .unwrap_or(&self.0)
             .to_lowercase()
+    }
+
+    /// 转换成微软翻译（Edge 端点）的格式。
+    ///
+    /// 微软用 `zh-Hans` / `zh-Hant` 区分简繁，而不是 BCP-47 风格的 `zh-CN` /
+    /// `zh-TW`；其余语种两家写法一致，原样透传。
+    /// auto 不经过这里 —— 调用处对 auto 的处理是「干脆不带 from 参数」，
+    /// 让微软自己检测（实测可行，见 msedge.rs）。
+    pub fn to_microsoft(&self) -> String {
+        match self.0.as_str() {
+            "zh-CN" => "zh-Hans".to_string(),
+            "zh-TW" => "zh-Hant".to_string(),
+            other => other.to_string(),
+        }
     }
 
     /// 转换成自然语言名称，给 AI 后端写 prompt 用
@@ -144,5 +165,13 @@ mod tests {
     fn 转成_mymemory_格式时砍掉区域码() {
         assert_eq!(Lang::parse("zh-CN").unwrap().to_mymemory(), "zh");
         assert_eq!(Lang::parse("ja").unwrap().to_mymemory(), "ja");
+    }
+
+    #[test]
+    fn 转成_microsoft_格式时换简繁写法() {
+        assert_eq!(Lang::parse("zh-CN").unwrap().to_microsoft(), "zh-Hans");
+        assert_eq!(Lang::parse("zh-TW").unwrap().to_microsoft(), "zh-Hant");
+        assert_eq!(Lang::parse("ja").unwrap().to_microsoft(), "ja");
+        assert_eq!(Lang::parse("en").unwrap().to_microsoft(), "en");
     }
 }

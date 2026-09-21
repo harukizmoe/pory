@@ -34,7 +34,15 @@ const MAX_ENTRIES: usize = 5000;
 /// v1 → v2：修掉 MyMemory 的 Autodetect 通道会把原文当译文退回的问题。
 /// 旧缓存里可能存着「译文 == 原文」这种脏数据，而键是 SHA-256、无法逐条甄别，
 /// 只能整体作废 —— 否则修好的逻辑会被旧脏值长期挡住（命中缓存就不再请求了）。
-const FORMAT_VERSION: u32 = 2;
+///
+/// v2 → v3：AI 后端开始处理 `to_if_same`（互翻）—— 旧 prompt 会把「中译中」
+/// 的坏结果写进缓存（例如 Hunyuan-MT 把原句换个说法当译文返回）。
+/// 同样的键在修好后应当产出不同的译文，按「译文语义变化即递增」的铁律整体作废。
+///
+/// v3 → v4：msedge / transmart / google 三家传统后端补上 `to_if_same` 处理
+/// （此前它们对「中文进、目标也是中文」的请求**原样返回原文**，却把原文当译文
+/// 写进了缓存）。旧缓存里同样存着「中译中」的坏结果，必须整体作废。
+const FORMAT_VERSION: u32 = 4;
 
 /// 单条缓存记录
 #[derive(Debug, Clone, Serialize, Deserialize)]

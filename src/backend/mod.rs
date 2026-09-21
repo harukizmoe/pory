@@ -8,26 +8,39 @@
 //! - 测试时可以塞个「假后端」进去，不发网络请求
 //! - 配置里按名字选后端，运行时动态决定
 
+use crate::config::{Config, TRADITIONAL_KNOWN};
 use crate::error::{PoryError, Result};
 use crate::lang::Lang;
 use std::future::Future;
 use std::pin::Pin;
 use std::time::Duration;
 
-// 声明子模块。三个具体后端都实现下面的 Backend trait。
+// 声明子模块。传统后端各实现下面的 Backend trait；
+// AI 提供商由同一个 `Ai` 类型按配置实例化多个（名字随实例走）。
 pub mod ai;
 pub mod google;
+pub mod msedge;
 pub mod mymemory;
+pub mod transmart;
 
-/// 所有可用后端的名字。
+/// 按名字构造一个**传统**后端（免 Key 机翻）。
 ///
-/// `build_backend` 的分派、错误提示、以及 `pory -b <名字>` 的合法性校验
-/// 都以它为准 —— 名字列表只有这一处定义，加后端时不会漏改某个提示文案。
-pub const KNOWN: [&str; 3] = ["mymemory", "google", "ai"];
-
-/// 这个名字是不是已知后端
-pub fn is_known(name: &str) -> bool {
-    KNOWN.contains(&name)
+/// 名单由 `config::TRADITIONAL_KNOWN` 定义，两边必须保持一致 ——
+/// 配置解析警告、错误提示、这里的 match 三处都以那份常量为口径。
+///
+/// 与 AI 提供商不同：传统后端免 Key、恒可构建（只要名字合法），
+/// 所以「名字不认识」是唯一的失败方式。
+pub fn build_traditional(name: &str, cfg: &Config) -> Result<Box<dyn Backend>> {
+    match name {
+        "msedge" => Ok(Box::new(msedge::MsEdge::new())),
+        "transmart" => Ok(Box::new(transmart::Transmart::new())),
+        "mymemory" => Ok(Box::new(mymemory::MyMemory::new(cfg.mymemory_email.clone()))),
+        "google" => Ok(Box::new(google::Google::new(cfg.google_endpoint.clone()))),
+        other => Err(PoryError::Config(format!(
+            "未知的传统后端 `{other}`。可用：{}",
+            TRADITIONAL_KNOWN.join(" / ")
+        ))),
+    }
 }
 
 /// 单次 HTTP 请求的超时上限。
@@ -86,10 +99,41 @@ pub struct Request {
     ///
     /// `None` 表示没有备用目标，此时后端遇到这种情况就原样返回原文。
     ///
-    /// 只有**能报告检测语种**的后端用得上它（目前是 MyMemory：
-    /// 它在响应里给 `detectedLanguage`）。Google / AI 后端忽略此字段 ——
-    /// 它们自己就能处理同语种，且不向上汇报检测结果。
+    /// **每个后端都必须自己处理这个字段**（2026-09-22 修正了一个错误认知：
+    /// 早先这里写着「Google / AI 自己就能处理同语种」，实测证明是错的 ——
+    /// 免 Key 的端点全都老实执行「把中文翻成中文」，也就是原样返回原文）。
+    /// 证据：
+    /// - MyMemory：用服务端给的 `translatedText=null` + `detectedLanguage` 判断
+    /// - AI：把「若原文已是 X 则改译 Y」写进 prompt
+    /// - msedge / transmart / google：**不换向**，得靠 `looks_untranslated`
+    ///   或响应里的检测语种自己判断（见 `same_language_handling`）
     pub to_if_same: Option<Lang>,
+}
+
+/// 判定这块文本「没有真正被翻译」—— 译文与原文完全相同（忽略首尾空白）。
+///
+/// 用途：auto 模式下原文已经是母语时，免 Key 的传统端点普遍**不会自己换向**，
+/// 而是把原文当译文退回（2026-09-22 实测 msedge / transmart 都是这样）。
+/// 这是本项目最不希望出现的失败形态：静默、且结果看着像成功。
+///
+/// 这是启发式（「OK」翻成「OK」也会命中），但两种结局都无害：
+/// 有备用目标就换向重发（多一次请求、结果更对），没有就原样返回（结果本来就对）。
+pub(crate) fn looks_untranslated(translated: &str, source: &str) -> bool {
+    translated.trim() == source.trim()
+}
+
+/// 比较两个语言码的「主语言」部分，忽略区域码与大小写：
+/// `zh-CN` 与 `zh-TW`、`en` 与 `en-GB`、`zh-Hans` 与 `zh` 各算同一门语言。
+///
+/// 用途：判断「检测出的源语言是不是就是目标语言」—— 是的话说明原文已是母语，
+/// 该换向而不是再翻一次自己。
+pub(crate) fn same_primary_language(a: &str, b: &str) -> bool {
+    /// 取 `zh-CN` / `zh_TW` / `zh-Hans` 里 `-` 或 `_` 之前的主语言码
+    fn primary(code: &str) -> &str {
+        code.split(['-', '_']).next().unwrap_or("")
+    }
+    let (pa, pb) = (primary(a), primary(b));
+    !pa.is_empty() && pa.eq_ignore_ascii_case(pb)
 }
 
 /// 翻译后端必须实现的行为。
@@ -124,4 +168,37 @@ pub trait Backend: Send + Sync {
         &'a self,
         req: Request,
     ) -> Pin<Box<dyn Future<Output = Result<String>> + Send + 'a>>;
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{looks_untranslated, same_primary_language};
+
+    #[test]
+    fn 主语言码比较忽略区域码与大小写() {
+        assert!(same_primary_language("zh-CN", "zh-TW"));
+        assert!(same_primary_language("zh", "zh-Hans"));
+        assert!(same_primary_language("en", "en-GB"));
+        assert!(same_primary_language("EN", "en"));
+        assert!(!same_primary_language("en", "zh-CN"));
+        assert!(!same_primary_language("ja", "zh"));
+    }
+
+    /// 空串不与任何语言相同 —— 否则换向逻辑会拼出空目标码，把「没翻译」变成请求报错
+    #[test]
+    fn 空语言码不与任何语言相同() {
+        assert!(!same_primary_language("", "zh-CN"));
+        assert!(!same_primary_language("", ""));
+        assert!(!same_primary_language("zh", ""));
+    }
+
+    /// 「译文 == 原文」判定：忽略首尾空白，其余一律严格比较
+    #[test]
+    fn 未翻译判定() {
+        assert!(looks_untranslated("今天天气不错", "今天天气不错"));
+        assert!(looks_untranslated("  今天天气不错\n", "今天天气不错"));
+        assert!(!looks_untranslated("The weather is nice", "今天天气不错"));
+        // 只差一个字也算翻译过 —— 宁可漏判也不误判（误判会多花一次换向请求）
+        assert!(!looks_untranslated("今天天气不错啊", "今天天气不错"));
+    }
 }

@@ -13,7 +13,7 @@
 //!
 //! 接口文档：https://mymemory.translated.net/doc/spec.php
 
-use crate::backend::{http_client, net_err, Backend, Request};
+use crate::backend::{http_client, net_err, same_primary_language, Backend, Request};
 use crate::error::{PoryError, Result};
 
 const ENDPOINT: &str = "https://api.mymemory.translated.net/get";
@@ -236,43 +236,18 @@ fn required_text(text: Option<String>) -> Result<String> {
     text.ok_or_else(|| PoryError::Parse("MyMemory 没返回译文（响应里没有 translatedText）".into()))
 }
 
-/// 比较两个语言码的「主语言」部分，忽略区域码与大小写：
-/// `zh-CN` 与 `zh-TW`、`en` 与 `en-GB` 各算同一门语言。
-///
-/// 用途：判断「检测出的源语言是不是就是目标语言」——
-/// 是的话没必要再重试一次（翻译成自己等于没翻）。
-fn same_primary_language(a: &str, b: &str) -> bool {
-    /// 取 `zh-CN` / `zh_TW` 里 `-` 或 `_` 之前的主语言码
-    fn primary(code: &str) -> &str {
-        code.split(['-', '_']).next().unwrap_or("")
-    }
-    primary(a).eq_ignore_ascii_case(primary(b))
-}
-
 #[cfg(test)]
 mod tests {
-    use super::same_primary_language;
+    // same_primary_language 已提到 backend/mod.rs 共用（三个传统后端都要它），
+    // 它的测试在那里；这里只留 MyMemory 自己的行为测试。
 
     #[test]
-    fn 主语言码比较忽略区域码与大小写() {
-        assert!(same_primary_language("zh-CN", "zh-TW"));
+    fn 主语言码比较在共用模块里可用() {
+        // 顺手钉住「提出去之后仍然可达、语义不变」——这是重构的安全绳
+        use crate::backend::same_primary_language;
+        assert!(same_primary_language("zh-CN", "zh-Hans"));
         assert!(same_primary_language("en", "en-GB"));
-        assert!(same_primary_language("EN", "en"));
-        assert!(same_primary_language("zh", "zh-CN"));
-    }
-
-    #[test]
-    fn 不同语言不相等() {
-        assert!(!same_primary_language("en", "zh-CN"));
-        assert!(!same_primary_language("ja", "zh"));
-        assert!(!same_primary_language("es", "en"));
-    }
-
-    #[test]
-    fn 空语言码不与任何语言相同() {
-        // 空串若不拦住，重试会拼出 `langpair=|zh-CN` —— 把「没翻译」
-        // 变成「请求报错」。调用方另外还有一道空值过滤，这里钉住函数本身的行为。
+        assert!(!same_primary_language("zh", "en"));
         assert!(!same_primary_language("", "zh-CN"));
-        assert!(!same_primary_language("", "en"));
     }
 }

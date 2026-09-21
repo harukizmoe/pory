@@ -46,6 +46,12 @@ pub struct Stats {
     /// 那等于静默，恰恰是本项目最反对的。所以这一层只负责**产出事实**，
     /// 「什么时候呈现」交给上层（它知道动画什么时候收尾）。
     pub warnings: Vec<String>,
+    /// 整次翻译的墙钟耗时（含切块、全部块的请求/缓存、回退尝试与缓存落盘）。
+    ///
+    /// 计时在 `Translator::run` 内部完成 —— 它是翻译过程本身，比外层
+    /// （main 的动画包装）量得更准；缓存命中显示 `0.0s` 是如实报告
+    /// 「瞬时」，与动画「命中不闪帧」同一哲学。
+    pub duration: std::time::Duration,
 }
 
 /// 单个块的翻译结果来源
@@ -79,6 +85,8 @@ pub struct Translator {
     backends_used: Vec<String>,
     /// 累计的警告文案，由 `stats()` 交给上层打印（原因见 `Stats::warnings`）
     warnings: Vec<String>,
+    /// 本次 run() 的墙钟耗时（见 `Stats::duration`）
+    duration: std::time::Duration,
 }
 
 impl Translator {
@@ -92,6 +100,7 @@ impl Translator {
             misses: 0,
             backends_used: Vec::new(),
             warnings: Vec::new(),
+            duration: std::time::Duration::ZERO,
         }
     }
 
@@ -114,6 +123,7 @@ impl Translator {
             misses: self.misses,
             backends: self.backends_used.clone(),
             warnings: self.warnings.clone(),
+            duration: self.duration,
         }
     }
 
@@ -123,6 +133,9 @@ impl Translator {
         if text.is_empty() {
             return Err(PoryError::Input("待翻译文本为空".into()));
         }
+
+        // 墙钟计时从切块前开始（切块也是翻译过程的一部分）
+        let start = std::time::Instant::now();
 
         // 切分粒度取后端链里**最保守**的那个上限。
         // 因为切分发生在「还不知道会用哪个后端」的阶段，
@@ -169,6 +182,9 @@ impl Translator {
                     .push(format!("缓存保存失败（不影响本次结果）：{e}"));
             }
         }
+
+        // 耗时含缓存落盘 —— 用户看到的「翻译用了多久」应当是完整墙钟时间
+        self.duration = start.elapsed();
 
         Ok(results.join("\n"))
     }
