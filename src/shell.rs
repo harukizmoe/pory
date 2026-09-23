@@ -365,15 +365,17 @@ const FISH: &str = r#"# pory — fish shell integration
 # Delete this line if you don't want the short name.
 abbr -a -- pr pory
 
+complete -c pory -a dict -d "Dictionary lookup"
+
 # ── Option completions ──
 complete -c pory -s t -l target -x -a "__LANGS__" -d "Target language"
 complete -c pory -s f -l from -x -a "auto __LANGS__" -d "Source language (default: auto)"
 complete -c pory -s b -l backend -x -a "ai traditional" -d "Translation mode"
 complete -c pory -l plain -d "Print the translation only: no color, no footnote, no animation"
-complete -c pory -l no-cache -d "Skip the cache for this call"
-complete -c pory -l refresh -d "Ignore existing cache and re-translate"
-complete -c pory -l timeout -r -d "Overall translation limit in seconds"
-complete -c pory -l clear-cache -d "Clear the translation cache and exit"
+complete -c pory -l no-cache -d "Skip translation and dictionary caches for this call"
+complete -c pory -l refresh -d "Ignore cache and regenerate this result"
+complete -c pory -l timeout -r -d "Overall translation or dictionary limit in seconds"
+complete -c pory -l clear-cache -d "Clear the translation and dictionary cache and exit"
 complete -c pory -l init -d "Write a sample config file and exit"
 complete -c pory -l init-shell -x -a "fish bash zsh" -d "Install shell integration and exit"
 complete -c pory -s h -l help -d "Print help"
@@ -419,7 +421,7 @@ _pory_complete() {
             return ;;
     esac
 
-    COMPREPLY=( $(compgen -W "-t --target -f --from -b --backend \
+    COMPREPLY=( $(compgen -W "dict -t --target -f --from -b --backend \
 -timeout --plain --no-cache --refresh --clear-cache --init --init-shell --print \
 -h --help -V --version" -- "$cur") )
 }
@@ -454,15 +456,16 @@ _pory() {
         '(-t --target)'{-t,--target}'[Target language]:language:(__LANGS__)' \
         '(-f --from)'{-f,--from}'[Source language (default: auto)]:language:(auto __LANGS__)' \
         '(-b --backend)'{-b,--backend}'[Translation mode]:mode:(ai traditional)' \
-        '--timeout[Overall translation limit in seconds]:seconds:' \
+        '--timeout[Overall translation or dictionary limit in seconds]:seconds:' \
         '--plain[Print the translation only: no color, no footnote, no animation]' \
-        '--no-cache[Skip the cache for this call]' \
-        '--refresh[Ignore existing cache and re-translate]' \
-        '--clear-cache[Clear the translation cache and exit]' \
+        '--no-cache[Skip translation and dictionary caches for this call]' \
+        '--refresh[Ignore cached results and regenerate]' \
+        '--clear-cache[Clear the translation and dictionary cache and exit]' \
         '--init[Write a sample config file and exit]' \
         '--init-shell[Install shell integration and exit]:shell:(fish bash zsh)' \
         '(-h --help)'{-h,--help}'[Print help]' \
         '(-V --version)'{-V,--version}'[Print version]' \
+        '1:command or text:(dict)' \
         '*:text to translate:'
 }
 
@@ -479,6 +482,7 @@ mod tests {
         let fish = integration("fish").unwrap();
         assert!(fish.contains("abbr -a -- pr pory"), "fish 缺短名");
         assert!(fish.contains("complete -c pory -s t"), "fish 缺 -t 补全");
+        assert!(fish.contains("-a dict"), "fish 缺词典命令补全");
 
         let bash = integration("bash").unwrap();
         assert!(!bash.contains("alias pr"), "bash 不该有短名");
@@ -487,12 +491,14 @@ mod tests {
             "bash 缺注册"
         );
         assert!(bash.contains("ai traditional"), "bash 缺模式候选");
+        assert!(bash.contains("dict"), "bash 缺词典命令补全");
 
         let zsh = integration("zsh").unwrap();
         assert!(!zsh.contains("alias pr"), "zsh 不该有短名");
         assert!(zsh.contains("#compdef pory"), "zsh 缺 compdef 声明");
         assert!(zsh.contains("_arguments"), "zsh 缺 _arguments");
         assert!(zsh.contains("ai traditional"), "zsh 缺模式候选");
+        assert!(zsh.contains("dict"), "zsh 缺词典命令补全");
     }
 
     /// 语言候选必须与解析器同源 —— 补全里有、实际不认（或反之）都是 bug

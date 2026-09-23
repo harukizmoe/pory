@@ -3,9 +3,9 @@
 **Translate text right in your terminal — key-free out of the box, and any AI you plug in.
 No browser, no copy-paste.**
 
-`pory` is a small command-line translator for people who live in a shell. It works out of
-the box, remembers what it has already translated, and tells you honestly which backend
-actually produced the result.
+`pory` is a small command-line translation tool with optional AI dictionary lookup. It works
+out of the box, remembers translated content, and tells you honestly which backend produced
+each result.
 
 [English](README.md) · [简体中文](README.zh-CN.md) · [日本語](README.ja.md) · [Issues](https://github.com/harukizmoe/pory/issues)
 
@@ -43,6 +43,8 @@ pory "你好，世界" -t en         # -> Hello, world.
 cat notes.md | pory -t en      # read from stdin
 pory -b traditional "hello"    # use machine translation
 pory "hello" --plain           # translation only
+pory dict hello                  # AI-generated dictionary entry
+pory dict "break the ice"        # phrase or idiom lookup
 ```
 
 By default, `primary = "zh"` and `secondary = "en"`, so text is translated in either
@@ -56,6 +58,8 @@ direction without flags. Change these values to use another language pair.
   APIs, with multiple models per provider.
 - **Translate both ways** — set `primary` and `secondary`; auto mode chooses the direction
   from the detected source language.
+- **AI dictionary lookup** — query English, Japanese, or Chinese words with pronunciation,
+  parts of speech, senses, and examples when available. Entries are AI-generated, not authoritative.
 - **Works in pipelines** — translation goes to stdout, status to stderr. Use `--plain` to
   suppress terminal decoration.
 - **Chunking and cache** — long input is split at paragraph/sentence boundaries where
@@ -67,24 +71,34 @@ direction without flags. Change these values to use another language pair.
 ## Usage
 
 ```
-Usage: pory [OPTIONS] [TEXT]
+Usage: pory [OPTIONS] [TEXT] [COMMAND]
 ```
 
-| Option | Description |
+| Option or command | Description |
 |---|---|
 | `[TEXT]` | Text to translate. Omitted → read from stdin (pipes supported) |
+| `dict <TERM>` | Look up a word or phrase; quote multiword terms. |
 | `-t, --target <LANG>` | Target language, e.g. `zh` / `en` / `ja` |
 | `-f, --from <LANG>` | Source language, defaults to auto detection |
 | `-b, --backend <MODE>` | `ai` / `traditional`. See below — it has two meanings |
 | `--plain` | Print the translation only: no color, no footer, no animation |
-| `--no-cache` | Don't use the cache: neither read existing entries nor write new ones |
-| `--refresh` | Ignore the existing cache, re-translate and update it |
-| `--timeout <SECONDS>` | Overall translation limit; defaults to 300 seconds (range: 1–86400) |
-| `--clear-cache` | Clear the translation cache and exit |
+| `--no-cache` | Don't read or write translation or dictionary cache entries |
+| `--refresh` | Ignore existing cache entries and regenerate the result |
+| `--timeout <SECONDS>` | Overall operation limit; defaults to 300 seconds (range: 1–86400) |
+| `--clear-cache` | Clear translation and dictionary cache entries, then exit |
 | `--init` | Write a sample config file and exit (never overwrites an existing one) |
 | `--init-shell <SHELL>` | Install shell integration: `fish` / `bash` / `zsh` |
 | `--print` | With `--init-shell`: print the script instead of installing it |
 | `--uninstall` | Remove everything pory added to this system, then exit |
+
+### Dictionary lookup
+
+Use `pory dict hello` or `pory dict "break the ice"`. The result follows the configured
+`primary` / `secondary` language direction; `-f` and `-t` can override it. The headword line
+shows the primary part of speech beside the concise direct translation, after the headword and
+pronunciation and before senses and examples. If AI lookup fails, Pory falls back to ordinary
+translation and labels the result as translation only. This command does not accept `-b` or
+`--plain`. Use `--no-cache` or `--refresh` to control cached entries.
 
 ### Backend selection
 
@@ -131,7 +145,7 @@ mode = "ai"                 # ai | traditional
 primary = "zh"              # your language: the target when -t is not given
 secondary = "en"            # the other language; leave "" to disable swapping
 source = "auto"
-cache = true                # false is equivalent to always passing --no-cache
+cache = true                # false disables translation and dictionary caches
 
 # ── AI providers (OpenAI-compatible; several can be configured) ──
 [ai]
@@ -141,7 +155,7 @@ order = ["zhipu", "siliconflow"]   # tried in this order; providers without a ke
 base_url = "https://api.siliconflow.cn/v1"
 api_key = ""
 models = ["tencent/Hunyuan-MT-7B", "Qwen/Qwen3-8B"]
-thinking = false            # optional: send enable_thinking = false
+thinking = false            # default off; set true to enable thinking for this provider
 
 # ── Traditional backends (no key, always available) ──
 # order decides both the chain used by mode = "traditional" and the safety net

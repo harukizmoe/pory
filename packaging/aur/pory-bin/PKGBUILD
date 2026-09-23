@@ -1,9 +1,9 @@
 # Maintainer: harukizmoe <harukizmoe at gmail dot com>
 
 pkgname=pory-bin
-pkgver=0.2.1
+pkgver=0.3.0
 pkgrel=1
-pkgdesc="A terminal translator with pluggable backends, chunk-level caching and automatic fallback"
+pkgdesc="A terminal translator and AI dictionary with pluggable backends, caching and automatic fallback"
 arch=('x86_64')
 url="https://github.com/harukizmoe/pory"
 license=('MIT')
@@ -29,7 +29,7 @@ options=('!strip' '!debug')
 # because makepkg caches downloads by filename: with a stable name, every version
 # bump would compare the new checksum against the previously cached file and fail.
 source=("pory-$pkgver-x86_64-unknown-linux-gnu.tar.gz::$url/releases/download/v$pkgver/pory-x86_64-unknown-linux-gnu.tar.gz")
-sha256sums=('5a4a1166f78701f25a97273b80ec484b02edca5a9575cc6385f26af806fa1b90')
+sha256sums=('ae23eb8b44989d772c02aef77dbdbf4bd7401899b0980c052e9cdbf925ebc335')
 
 package() {
   install -Dm0755 "$srcdir/pory-x86_64-unknown-linux-gnu/pory" "$pkgdir/usr/bin/pory"

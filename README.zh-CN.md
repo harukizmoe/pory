@@ -2,8 +2,8 @@
 
 **在终端里直接翻译 —— 开箱免 Key，也能接上你自己选的 AI。不用开浏览器，不用复制粘贴。**
 
-`pory` 是一个给常驻命令行的人用的小翻译器。装完即用，记得住翻过的东西，
-并且**如实告诉你这次的结果到底是谁翻的**。
+`pory` 是一个为命令行用户提供翻译与 AI 词典查词的工具。翻译功能开箱即用，会记住已翻译内容，
+并且**如实告诉你这次结果由哪个后端生成**。
 
 [English](README.md) · [简体中文](README.zh-CN.md) · [日本語](README.ja.md) · [问题反馈](https://github.com/harukizmoe/pory/issues)
 
@@ -41,6 +41,8 @@ pory "你好，世界" -t en         # -> Hello, world.
 cat notes.md | pory -t en      # 从标准输入读取
 pory -b traditional "hello"    # 使用传统机翻
 pory "hello" --plain           # 只输出译文
+pory dict hello                  # AI 生成的词典词条
+pory dict "break the ice"        # 查询词组或习语
 ```
 
 默认 `primary = "zh"`、`secondary = "en"`，不带参数也能双向翻译。可在配置中更换语种。
@@ -51,6 +53,7 @@ pory "hello" --plain           # 只输出译文
 - **可接入不同服务** —— 支持免 Key 机翻和 OpenAI 兼容 API；每个 AI 提供商可配置多个模型。
 - **双向翻译** —— 设置 `primary` 与 `secondary` 后，auto 模式会按检测出的原文语种选择方向。
 - **适合管道** —— 译文写入 stdout，状态写入 stderr；`--plain` 只输出译文。
+- **AI 词典查词** —— 支持查中文、日语、英语词条；按可用信息展示读音、词性、义项和例句。结果由 AI 生成，不保证权威性。
 - **切块与缓存** —— 长文本尽量按段落和句子切分，已完成的文本块可复用缓存。
 - **Shell 集成** —— 支持 fish、bash、zsh 的别名与补全；`--uninstall` 可撤销 pory 添加的内容。
 - **Rust + rustls** —— 不依赖 OpenSSL。
@@ -58,24 +61,34 @@ pory "hello" --plain           # 只输出译文
 ## 用法
 
 ```
-Usage: pory [OPTIONS] [TEXT]
+Usage: pory [OPTIONS] [TEXT] [COMMAND]
 ```
 
-| 参数 | 说明 |
+| 参数/命令 | 说明 |
 |---|---|
 | `[TEXT]` | 要翻译的文本。省略则从 stdin 读取（支持管道） |
+| `dict <TERM>` | 查询单词或词组；多词词条需加引号 |
 | `-t, --target <LANG>` | 目标语言，如 `zh` / `en` / `ja` |
 | `-f, --from <LANG>` | 源语言，默认 `auto` 自动检测 |
 | `-b, --backend <MODE>` | `ai` / `traditional`。**它有两种含义，见下** |
 | `--plain` | 只输出纯译文：不加颜色、不要脚注、不要动画 |
-| `--no-cache` | 本次不使用缓存（不读也不写） |
-| `--refresh` | 忽略已有缓存，强制重新翻译并更新缓存 |
-| `--timeout <SECONDS>` | 整次翻译的总时限，默认 300 秒（范围 1–86400 秒） |
-| `--clear-cache` | 清空翻译缓存并退出 |
+| `--no-cache` | 本次不读写翻译或词条缓存 |
+| `--refresh` | 忽略已有缓存，强制重新生成结果 |
+| `--timeout <SECONDS>` | 整次操作的总时限，默认 300 秒（范围 1–86400 秒） |
+| `--clear-cache` | 清空翻译与词条缓存并退出 |
 | `--init` | 生成示例配置文件并退出（已存在时绝不覆盖） |
 | `--init-shell <SHELL>` | 安装 shell 集成：`fish` / `bash` / `zsh` |
 | `--print` | 配合 `--init-shell`：只打印脚本，不安装 |
 | `--uninstall` | 清掉 pory 在这台机器上加的所有东西，然后退出 |
+
+### 词典查词
+
+```bash
+pory dict hello
+pory dict "break the ice"
+```
+
+释义语向遵循 `primary` / `secondary` 自动规则，也可用 `-f` 和 `-t` 单独指定。成功时，词头行会在词头和读音后将主要词性与简短直译并列显示，之后再展示义项与例句。AI 查词失败时会降级为普通翻译，并明确标为“仅翻译，非词条”。此命令不接受 `-b` 或 `--plain`；可用 `--no-cache` 或 `--refresh` 控制缓存。
 
 ### `-b` 的两种用法
 
@@ -118,7 +131,7 @@ mode = "ai"                 # ai | traditional
 primary = "zh"              # 第一语言（母语）：不指定 -t 时翻成它
 secondary = "en"            # 第二语言：与第一语言互翻，留空 "" 即关闭
 source = "auto"
-cache = true                # false 等价于每次都带 --no-cache
+cache = true                # false 等价于每次都带 --no-cache（翻译和词条都不读写）
 
 # ── AI 提供商（OpenAI 兼容，可配多个）──
 [ai]
@@ -128,7 +141,7 @@ order = ["zhipu", "siliconflow"]   # 按此顺序尝试；没填 api_key 的自�
 base_url = "https://api.siliconflow.cn/v1"
 api_key = ""
 models = ["tencent/Hunyuan-MT-7B", "Qwen/Qwen3-8B"]
-thinking = false            # 可选：请求体带 enable_thinking = false
+thinking = false            # 默认关闭；改为 true 可按提供商开启思考
 
 # ── 传统机翻（免 Key，永远可用）──
 # order 同时决定 mode = "traditional" 时的链顺序，和 mode = "ai" 时接在 AI 后面的保底顺序。

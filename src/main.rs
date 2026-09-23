@@ -15,6 +15,7 @@
 mod backend;
 mod cache;
 mod config;
+mod dictionary;
 mod error;
 mod lang;
 mod progress;
@@ -22,17 +23,23 @@ mod shell;
 mod translator;
 mod uninstall;
 
-use clap::Parser;
+use clap::{Parser, Subcommand};
+use std::future::Future;
 use std::io::Read;
 
-use backend::ai::Ai;
 use backend::Backend;
 use cache::Cache;
-use config::{is_valid_provider_name, Config, Mode, TRADITIONAL_KNOWN};
+use config::{Config, Mode, TRADITIONAL_KNOWN};
 use error::{PoryError, Result};
 use lang::Lang;
 use std::io::IsTerminal;
 use translator::{Stats, TranslateJob, Translator};
+
+#[derive(Subcommand, Debug, Clone)]
+enum Command {
+    /// Look up a word or phrase; quote multiword terms
+    Dict { term: String },
+}
 
 /// 命令行参数定义。
 ///
@@ -44,25 +51,28 @@ use translator::{Stats, TranslateJob, Translator};
 /// （2026-09-20 决定：CLI 的对外描述只保留一种语言，即英文；不做中英双语。）
 /// 这是全项目唯一允许出现英文的位置，别"顺手"把它们改回中文 ——
 /// 改它们等于改用户界面。真正的内部注释仍然全部中文。
-#[derive(Parser, Debug)]
+#[derive(Parser, Debug, Clone)]
 #[command(
     name = "pory",
     version,
-    about = "A language converter in your terminal",
-    long_about = "pory turns one set of symbols into another.\n\n\
+    about = "A terminal translator and dictionary",
+    long_about = "pory translates text and looks up dictionary entries.\n\n\
                   Reads from stdin when no text is given, so it pipes well:\n  \
-                  echo hello | pory -t ja"
+                  echo hello | pory -t ja\n\
+                  pory dict hello"
 )]
 struct Cli {
+    #[command(subcommand)]
+    command: Option<Command>,
     /// Text to translate. If omitted, read from stdin (pipes supported)
     text: Option<String>,
 
     /// Target language, e.g. zh / en / ja
-    #[arg(short = 't', long)]
+    #[arg(short = 't', long, global = true)]
     target: Option<String>,
 
     /// Source language, defaults to auto detection
-    #[arg(short = 'f', long)]
+    #[arg(short = 'f', long, global = true)]
     from: Option<String>,
 
     /// Translation mode: ai / traditional
@@ -82,19 +92,19 @@ struct Cli {
     #[arg(long)]
     plain: bool,
 
-    /// Don't use the cache: neither read existing entries nor write new ones
-    #[arg(long)]
+    /// Don't read or write translation or dictionary cache entries
+    #[arg(long, global = true)]
     no_cache: bool,
 
-    /// Ignore the existing cache, re-translate and update it
-    #[arg(long)]
+    /// Ignore cached results and regenerate the translation or entry
+    #[arg(long, global = true)]
     refresh: bool,
 
-    /// Maximum wall-clock time for one translation, in seconds (default: 300; range: 1-86400)
-    #[arg(long, value_name = "SECONDS", value_parser = parse_timeout_secs)]
+    /// Maximum wall-clock time for one command (default: 300 seconds; range: 1-86400)
+    #[arg(long, value_name = "SECONDS", value_parser = parse_timeout_secs, global = true)]
     timeout: Option<u64>,
 
-    /// Clear the translation cache and exit
+    /// Clear the translation and dictionary cache, then exit
     #[arg(long)]
     clear_cache: bool,
 
@@ -128,7 +138,7 @@ struct Cli {
     /// Remove everything pory added to this system and exit
     ///
     /// Cleans shell integration (completion files + rc aliases) and the
-    /// translation cache without asking. The config file is kept unless you
+    /// translation and dictionary cache without asking. The config file is kept unless you
     /// confirm its deletion at the prompt.
     #[arg(long)]
     uninstall: bool,
@@ -246,37 +256,37 @@ async fn main() {
 }
 
 /// 真正的执行流程
-async fn run(cli: Cli) -> Result<()> {
-    // ── 1. 载入配置 ──
-    // 配置提供默认值，命令行参数优先级更高（覆盖配置）
+async fn run(mut cli: Cli) -> Result<()> {
     let cfg = Config::load();
 
-    // ── 2. 确定输入文本 ──
-    // 先记下「输入是不是从 stdin 来的」—— 下面要移走 cli.text，之后就问不出来了。
-    // 这个布尔只用于一件事：决定要不要回显原文（见 print_result）。
-    let echo_source = cli.text.is_none();
-    let text = resolve_input(cli.text)?;
+    if let Some(Command::Dict { term }) = cli.command.as_ref() {
+        return run_dictionary(&cli, &cfg, term).await;
+    }
 
-    // ── 3. 确定语种 ──
-    // 优先级：命令行 > 配置文件默认值
+    let echo_source = cli.text.is_none();
+    let text = resolve_input(cli.text.take())?;
+    run_translation(&cli, &cfg, text, echo_source, None).await
+}
+
+/// 普通翻译与词典失败降级共用同一条执行路径。
+async fn run_translation(
+    cli: &Cli,
+    cfg: &Config,
+    text: String,
+    echo_source: bool,
+    timeout_override: Option<std::time::Duration>,
+) -> Result<()> {
     let from = Lang::parse(cli.from.as_deref().unwrap_or(&cfg.source))?;
-    // 配置里的 `primary` 就是「不指定 -t 时翻成什么」
     let to = match &cli.target {
-        Some(t) => Lang::parse(t)?,
+        Some(target) => Lang::parse(target)?,
         None => Lang::parse(&cfg.primary)?,
     };
-    // 第一语言 / 第二语言互翻（只在 auto 模式且未显式指定 -t 时生效）
-    let to_if_same = resolve_swap(&cfg, &from, &to, cli.target.is_some());
-
-    // ── 4. 构建后端链（按模式路由）──
-    // -b 给了就用它当这一次的模式；没给就按配置文件的 mode
+    let to_if_same = resolve_swap(cfg, &from, &to, cli.target.is_some());
     let mode = match cli.backend.as_deref() {
-        Some(name) => Some(parse_mode(name)?),
-        None => None,
+        Some(name) => parse_mode(name)?,
+        None => cfg.mode,
     };
-    let backends = build_mode_chain(&cfg, mode.unwrap_or(cfg.mode))?;
-
-    // ── 5. 执行翻译 ──
+    let backends = build_mode_chain(cfg, mode)?;
     let job = TranslateJob {
         text,
         from,
@@ -285,26 +295,20 @@ async fn run(cli: Cli) -> Result<()> {
     };
 
     let mut translator = Translator::new(backends);
-
-    // 缓存开关。两个来源，效果相同（完全不碰缓存：既不读也不写）：
-    //   --no-cache      —— 只管这一次
-    //   cache = false   —— 配置文件里的持久开关，管以后每次都这样
-    // 命令行优先：加了 --no-cache 就用不上缓存，配置说 true 也没意义。
     let use_cache = !cli.no_cache && cfg.cache;
     if use_cache {
         translator = translator.with_cache(Cache::load());
     }
-    // --refresh 时忽略已有缓存，强制重新翻译
     if cli.refresh {
         translator = translator.with_refresh(true);
     }
-    if let Some(seconds) = cli.timeout {
-        translator = translator.with_timeout(std::time::Duration::from_secs(seconds));
+    if let Some(timeout) =
+        timeout_override.or_else(|| cli.timeout.map(std::time::Duration::from_secs))
+    {
+        translator = translator.with_timeout(timeout);
     }
 
     let result = if !cli.plain && progress::enabled() {
-        // 终端里带等待动画。管道 / CI / 重定向里 stderr 不是终端，
-        // 这条分支根本不会走 —— 那些场景的行为与加动画之前完全一致。
         translate_with_progress(&mut translator, &job).await
     } else {
         translator.run(&job).await
@@ -312,7 +316,6 @@ async fn run(cli: Cli) -> Result<()> {
     let result = match result {
         Ok(result) => result,
         Err(error) => {
-            // 超时或后续块失败时也保留此前发生的回退信息。
             for warning in &translator.stats().warnings {
                 eprintln!("⚠ {warning}");
             }
@@ -320,16 +323,10 @@ async fn run(cli: Cli) -> Result<()> {
         }
     };
 
-    // ── 6. 输出 ──
     let stats = translator.stats();
-
-    // 翻译过程中攒下的警告到这里才打印。为什么不在发生处直接打？
-    // 因为那会儿 stderr 的当前行被动画占着，直接打印会接在动画行尾巴上，
-    // 而下一帧的 `\x1b[2K` 会把它连同一起擦掉 —— 那等于静默。详见 Stats::warnings。
-    for w in &stats.warnings {
-        eprintln!("⚠ {w}");
+    for warning in &stats.warnings {
+        eprintln!("⚠ {warning}");
     }
-
     print_result(
         &job,
         &result,
@@ -343,27 +340,108 @@ async fn run(cli: Cli) -> Result<()> {
     Ok(())
 }
 
-/// 带等待动画地跑一次翻译。
-///
-/// 为什么用 `select!` 把「请求」和「计时器」放在**同一条线程**里轮询，
-/// 而不是另起一个线程画动画？
-/// 因为本项目在「两个写者」上栽过：当初 tokio 多线程运行时让 async 写 stderr
-/// 与主线程输出交错，出现过 `⚠ a⚠ ai 失败` 这种撕裂。`select!` 全程在同一条
-/// 线程里，**结构上不可能撕裂** —— 同一时刻只有一处能写 stderr。
-///
-/// 请求一回来就立刻擦掉动画行，紧接着打印的结果落在干净的位置上：
-/// 不跳行、不留残影、也不多一个空行。
-async fn translate_with_progress(
-    translator: &mut Translator,
-    job: &TranslateJob,
-) -> Result<String> {
-    // 把请求钉住（pin），这样 tick 触发时**不会把它丢掉** ——
-    // 每轮 select 重新轮询的是同一个 future，请求只发一次。
-    let fut = translator.run(job);
-    tokio::pin!(fut);
+async fn run_dictionary(cli: &Cli, cfg: &Config, term: &str) -> Result<()> {
+    if cli.backend.is_some() {
+        return Err(PoryError::Input("`-b` 不适用于词典查词".into()));
+    }
+    if cli.plain {
+        return Err(PoryError::Input("`--plain` 不适用于词典查词".into()));
+    }
+    let term = term.trim();
+    if term.is_empty() {
+        return Err(PoryError::Input("待查词条不能为空".into()));
+    }
 
-    // `interval_at` 的第一拍落在 FIRST_FRAME 之后，于是
-    // 「请求比 150 ms 快 → 一帧都不画」不需要任何额外判断。
+    let from = Lang::parse(cli.from.as_deref().unwrap_or(&cfg.source))?;
+    let to = match &cli.target {
+        Some(target) => Lang::parse(target)?,
+        None => Lang::parse(&cfg.primary)?,
+    };
+    let to_if_same = resolve_swap(cfg, &from, &to, cli.target.is_some());
+    if (!from.is_auto() && !dictionary::supports_language(&from))
+        || !dictionary::supports_language(&to)
+        || to_if_same
+            .as_ref()
+            .is_some_and(|lang| !dictionary::supports_language(lang))
+    {
+        return Err(PoryError::Input(
+            "词典目前支持中文、日语和英语；请用 -f / -t 指定语种".into(),
+        ));
+    }
+
+    let timeout = std::time::Duration::from_secs(
+        cli.timeout
+            .unwrap_or(translator::DEFAULT_TRANSLATION_TIMEOUT.as_secs()),
+    );
+    let started = std::time::Instant::now();
+    let candidates = backend::ai::configured(cfg);
+    let use_cache = !cli.no_cache && cfg.cache;
+    let mut cache = use_cache.then(Cache::load);
+    let lookup = dictionary::lookup(dictionary::LookupRequest {
+        term,
+        from: &from,
+        to: &to,
+        to_if_same: to_if_same.as_ref(),
+        models: &candidates.models,
+        cache: cache.as_mut(),
+        refresh: cli.refresh,
+        timeout,
+    });
+    let result = if progress::enabled() {
+        with_progress("正在查词", lookup).await
+    } else {
+        lookup.await
+    };
+
+    match result {
+        Ok(result) => {
+            report_ai_candidates(&candidates);
+            if let Some(cache) = cache.as_ref() {
+                if let Err(error) = cache.save() {
+                    eprintln!("⚠ 词条缓存保存失败（不影响本次结果）：{error}");
+                }
+            }
+            println!(
+                "{}",
+                dictionary::render(&result.entry, std::io::stdout().is_terminal())
+            );
+            let cache_status = if !use_cache {
+                "cache off"
+            } else if result.cached {
+                "cache hit"
+            } else {
+                "AI generated"
+            };
+            let status = format!(
+                "◈ AI 生成（非权威） · {} · {cache_status} · {:.1}s",
+                result.model,
+                started.elapsed().as_secs_f64()
+            );
+            if std::io::stderr().is_terminal() {
+                use owo_colors::OwoColorize;
+                eprintln!("{}", status.bright_black());
+            } else {
+                eprintln!("{status}");
+            }
+            Ok(())
+        }
+        Err(error) => {
+            let remaining = timeout.saturating_sub(started.elapsed());
+            if remaining < std::time::Duration::from_secs(1) {
+                return Err(PoryError::DictionaryTimeout(timeout.as_secs()));
+            }
+            eprintln!("⚠ AI 词条不可用，降级为普通翻译（仅翻译，非词条）：{error}");
+            run_translation(cli, cfg, term.to_string(), false, Some(remaining)).await
+        }
+    }
+}
+
+/// 在单线程运行时等待任意请求，并显示指定文案。
+///
+/// 请求和动画在同一线程轮询，避免 stderr 同时写入导致输出交错。
+async fn with_progress<F: Future>(label: &str, future: F) -> F::Output {
+    let fut = future;
+    tokio::pin!(fut);
     let mut ticker = tokio::time::interval_at(
         tokio::time::Instant::now() + progress::FIRST_FRAME,
         progress::FRAME,
@@ -374,19 +452,26 @@ async fn translate_with_progress(
 
     loop {
         tokio::select! {
-            out = &mut fut => {
+            output = &mut fut => {
                 if drawn {
                     progress::clear();
                 }
-                return out;
+                return output;
             }
             _ = ticker.tick() => {
-                progress::draw(frame, start.elapsed());
+                progress::draw_for(label, frame, start.elapsed());
                 frame += 1;
                 drawn = true;
             }
         }
     }
+}
+
+async fn translate_with_progress(
+    translator: &mut Translator,
+    job: &TranslateJob,
+) -> Result<String> {
+    with_progress(progress::TRANSLATION_LABEL, translator.run(job)).await
 }
 
 /// 「设置默认模式」形态的判定与执行。
@@ -404,7 +489,7 @@ async fn translate_with_progress(
 ///
 /// 名字不是合法模式时直接报错、不写进配置 —— 写进去等于以后每次启动都报错。
 fn try_set_mode(cli: &Cli) -> Result<Option<(Mode, std::path::PathBuf)>> {
-    if cli.text.is_some() || !std::io::stdin().is_terminal() {
+    if cli.command.is_some() || cli.text.is_some() || !std::io::stdin().is_terminal() {
         return Ok(None);
     }
     let Some(name) = cli.backend.as_deref() else {
@@ -449,6 +534,18 @@ fn parse_timeout_secs(value: &str) -> std::result::Result<u64, String> {
     }
 }
 
+fn report_ai_candidates(candidates: &backend::ai::AiCandidates) {
+    if !candidates.no_key.is_empty() {
+        eprintln!(
+            "⚠ AI 提供商未填 api_key，已跳过：{}",
+            candidates.no_key.join("、")
+        );
+    }
+    for (name, why) in &candidates.skipped {
+        eprintln!("⚠ 跳过后端 `{name}`：{why}");
+    }
+}
+
 /// 按翻译模式构建后端链。
 ///
 /// **mode 路由只发生在链构建**：产出仍是一条平链，调度与回退机制
@@ -472,84 +569,39 @@ fn parse_timeout_secs(value: &str) -> std::result::Result<u64, String> {
 fn build_mode_chain(cfg: &Config, mode: Mode) -> Result<Vec<Box<dyn Backend>>> {
     let mut chain: Vec<Box<dyn Backend>> = Vec::new();
     let mut skipped: Vec<(String, String)> = Vec::new();
-    // 构建成功的 AI 实例数（提供商 × 模型）。用于判断「mode=ai 但实际没有 AI 可用」
-    // —— 这种情况要明说，不能让用户以为在用 AI 实际在用机翻。
     let mut ai_ready = 0usize;
 
     match mode {
         Mode::Ai => {
-            let mut no_key: Vec<String> = Vec::new();
-            // order 里重复列同一提供商视为一次（展开两次没有意义，静默忽略）
-            let mut seen: std::collections::HashSet<&String> = std::collections::HashSet::new();
+            let candidates = backend::ai::configured(cfg);
+            ai_ready = candidates.models.len();
+            report_ai_candidates(&candidates);
+            chain.extend(
+                candidates
+                    .models
+                    .into_iter()
+                    .map(|ai| Box::new(ai) as Box<dyn Backend>),
+            );
 
-            for name in &cfg.ai.order {
-                if !seen.insert(name) {
-                    continue;
-                }
-                if !is_valid_provider_name(name) {
-                    skipped.push((
-                        name.clone(),
-                        "名字不合法（只允许小写字母 / 数字 / 连字符）".into(),
-                    ));
-                    continue;
-                }
-                let Some(p) = cfg.ai.providers.get(name) else {
-                    skipped.push((
-                        name.clone(),
-                        "order 里列了名字，但 [ai] 下没有对应的配置表".into(),
-                    ));
-                    continue;
-                };
-                if p.api_key.trim().is_empty() {
-                    no_key.push(name.clone());
-                    continue;
-                }
-                if p.models.is_empty() {
-                    skipped.push((name.clone(), "没有列出任何模型（models 为空）".into()));
-                    continue;
-                }
-
-                // **一个提供商 × N 个模型 = N 个实例**，按 models 声明顺序进链：
-                // 同提供商的主力模型挂了，先试它的备选模型，再轮到下一家提供商。
-                // 实例名用「提供商:模型」—— 脚注的回退路径里必须分得清
-                // 是哪个模型挂了（缓存键由 Ai::cache_detail 再带一份模型名，
-                // 双保险：名字或 detail 任一变化都会产生新键）。
-                for model in &p.models {
-                    chain.push(Box::new(Ai::new(
-                        format!("{name}:{model}"),
-                        p.base_url.clone(),
-                        p.api_key.clone(),
-                        model.clone(),
-                        p.thinking,
-                    )));
-                    ai_ready += 1;
-                }
-            }
-
-            if !no_key.is_empty() {
-                eprintln!("⚠ AI 提供商未填 api_key，已跳过：{}", no_key.join("、"));
-            }
-
-            // 拼接传统全链。AI 与传统是两个名字空间，不会撞名；
-            // 去重防的是 order 里写重复（同一条链里同名后端出现两次没有意义）。
+            // AI 与传统后端使用不同名字空间；传统链始终保留作兜底。
             for name in &cfg.traditional.order {
-                if chain.iter().any(|b| b.name() == name) {
+                if chain.iter().any(|backend| backend.name() == name) {
                     continue;
                 }
                 match backend::build_traditional(name, cfg) {
-                    Ok(b) => chain.push(b),
-                    Err(e) => skipped.push((name.clone(), e.to_string())),
+                    Ok(backend) => chain.push(backend),
+                    Err(error) => skipped.push((name.clone(), error.to_string())),
                 }
             }
         }
         Mode::Traditional => {
             for name in &cfg.traditional.order {
-                if chain.iter().any(|b| b.name() == name) {
+                if chain.iter().any(|backend| backend.name() == name) {
                     continue;
                 }
                 match backend::build_traditional(name, cfg) {
-                    Ok(b) => chain.push(b),
-                    Err(e) => skipped.push((name.clone(), e.to_string())),
+                    Ok(backend) => chain.push(backend),
+                    Err(error) => skipped.push((name.clone(), error.to_string())),
                 }
             }
         }
@@ -569,9 +621,6 @@ fn build_mode_chain(cfg: &Config, mode: Mode) -> Result<Vec<Box<dyn Backend>>> {
         }));
     }
 
-    // mode=Ai 但一个 AI 都没上链（order 为空 / 全缺 Key / 全配错）
-    // —— 必须明说，静默落传统等于骗用户「在用 AI」。
-    // 这条是引导性的：告诉用户怎么才能真正用上 AI。
     if mode == Mode::Ai && ai_ready == 0 {
         eprintln!("⚠ 没有可用的 AI 提供商，本次将直接使用传统机翻。");
         eprintln!("  打开配置文件，按 [ai] 段注释填一个提供商（含 api_key）即可用上 AI 翻译。");
@@ -812,6 +861,38 @@ mod tests {
     use super::*;
     use config::ProviderConfig;
 
+    #[test]
+    fn dict_短语必须作为单个参数传入() {
+        let cli = Cli::try_parse_from(["pory", "dict", "break the ice"]).unwrap();
+        match cli.command {
+            Some(Command::Dict { term }) => assert_eq!(term, "break the ice"),
+            _ => panic!("应解析为词典子命令"),
+        }
+        assert!(Cli::try_parse_from(["pory", "dict", "break", "the", "ice"]).is_err());
+    }
+
+    #[tokio::test]
+    async fn dict_拒绝翻译专用选项() {
+        let cfg = Config::default();
+        for args in [
+            vec!["pory", "--plain", "dict", "hello"],
+            vec!["pory", "-b", "traditional", "dict", "hello"],
+        ] {
+            let cli = Cli::try_parse_from(args).unwrap();
+            let term = match cli.command.as_ref() {
+                Some(Command::Dict { term }) => term,
+                _ => panic!("应解析为词典子命令"),
+            };
+            assert!(run_dictionary(&cli, &cfg, term)
+                .await
+                .unwrap_err()
+                .to_string()
+                .contains("不适用于词典查词"));
+        }
+        assert!(Cli::try_parse_from(["pory", "dict", "hello", "--plain"]).is_err());
+        assert!(Cli::try_parse_from(["pory", "dict", "hello", "-b", "traditional"]).is_err());
+    }
+
     /// 造一份「第二语言是指定值」的配置
     fn 配置(second: &str) -> Config {
         Config {
@@ -892,7 +973,7 @@ mod tests {
                 base_url: "https://example.com/v4".to_string(),
                 api_key: "test-key".to_string(),
                 models: models.iter().map(|s| s.to_string()).collect(),
-                thinking: None,
+                thinking: false,
             },
         );
     }

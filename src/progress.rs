@@ -35,8 +35,8 @@ pub const FIRST_FRAME: Duration = Duration::from_millis(150);
 /// （Claude 那种 `✻`/`✳` 在这套字体里没有，别用。）
 const SPIN: [char; 10] = ['⠋', '⠙', '⠹', '⠸', '⠼', '⠴', '⠦', '⠧', '⠇', '⠏'];
 
-/// 等待文案。用中文：运行时提示一直如此（英文只出现在 `--help` 里）。
-const LABEL: &str = "正在翻译";
+/// 默认翻译等待文案，由 CLI 路由传入动画。
+pub const TRANSLATION_LABEL: &str = "正在翻译";
 
 /// 动画该不该出现。
 ///
@@ -51,8 +51,13 @@ pub fn enabled() -> bool {
 ///
 /// 单独抽出来是为了能直接测「光带真的扫过了每一个字」，
 /// 而不必去解析 ANSI 转义码。
+#[cfg(test)]
 fn peak(frame: usize) -> isize {
-    let span = LABEL.chars().count() + 2;
+    peak_for(frame, TRANSLATION_LABEL.chars().count())
+}
+
+fn peak_for(frame: usize, text_len: usize) -> isize {
+    let span = text_len + 2;
     (frame / 2 % span) as isize - 1
 }
 
@@ -62,13 +67,17 @@ fn peak(frame: usize) -> isize {
 /// 字形在「转」、光在「淌」，两个频率不同才不会显得呆板。
 /// 波峰从 -1 走到 len，让光带完整地飘出去再回来，
 /// 而不是在边缘凭空出现、凭空消失。
+#[cfg(test)]
 pub fn frame_text(frame: usize, elapsed: Duration) -> String {
-    let cells: Vec<char> = LABEL.chars().collect();
-    let head = peak(frame);
+    frame_text_for(TRANSLATION_LABEL, frame, elapsed)
+}
 
-    // 光带用「亮 → 中 → 暗」三档：#0 是波峰，±1 是余晖，
-    // 这样看着像一道光晕，而不是一个硬边矩形在爬。
-    // 底色一律暗灰 —— 「有颜色」的位置永远在动，静止的地方没有颜色。
+/// 使用调用方提供的文案渲染一帧，动画算法与翻译等待共用。
+pub fn frame_text_for(label: &str, frame: usize, elapsed: Duration) -> String {
+    let cells: Vec<char> = label.chars().collect();
+    let head = peak_for(frame, cells.len());
+
+    // 光带用「亮 → 中 → 暗」三档：#0 是波峰，±1 是余晖。
     let mut body = String::new();
     for (i, ch) in cells.iter().enumerate() {
         let lit = ch.to_string();
@@ -87,16 +96,11 @@ pub fn frame_text(frame: usize, elapsed: Duration) -> String {
     )
 }
 
-/// 画一帧：回到行首、清行、写整行。
+/// 绘制指定文案的一帧并清空旧行，避免残影。
 ///
-/// 为什么用 `\x1b[2K` 清行，而不是补空格对齐？因为补空格要先算**可见宽度**，
-/// 而 `正在翻译` 是 CJK（每字占 2 格）、秒数的位数还会从 1 位涨到 2 位 ——
-/// 算错一个格就是一行残影。清行不需要知道任何宽度。
-///
-/// 也不需要手动 flush：Rust 的 stderr 是**无缓冲**的，`eprint!` 立刻落盘。
-/// 这正是 `\r` 就地重绘能成立的前提。
-pub fn draw(frame: usize, elapsed: Duration) {
-    eprint!("\r\x1b[2K{}", frame_text(frame, elapsed));
+/// stderr 无缓冲，整帧在单线程一次写入，避免输出交错。
+pub fn draw_for(label: &str, frame: usize, elapsed: Duration) {
+    eprint!("\r\x1b[2K{}", frame_text_for(label, frame, elapsed));
 }
 
 /// 擦掉动画行，把光标留在行首 —— 让后面紧接着的输出从干净的一行开始。
@@ -126,10 +130,25 @@ mod tests {
         out
     }
 
+    #[test]
+    fn 查词动画使用调用方文案且保持帧宽() {
+        let label = "正在查词";
+        let span = (label.chars().count() + 2) * 2 + SPIN.len();
+        let frames: Vec<String> = (0..span)
+            .map(|frame| strip_ansi(&frame_text_for(label, frame, Duration::from_millis(1234))))
+            .collect();
+
+        assert!(frames[0].starts_with("⠋ 正在查词"));
+        assert!(frames[0].ends_with("1.2s"));
+        assert!(frames
+            .iter()
+            .all(|frame| frame.chars().count() == frames[0].chars().count()));
+    }
+
     /// 每一帧的可见宽度必须完全一样，否则 `\r` 重绘会留下残影
     #[test]
     fn 每帧可见宽度一致() {
-        let span = (LABEL.chars().count() + 2) * 2 + SPIN.len();
+        let span = (TRANSLATION_LABEL.chars().count() + 2) * 2 + SPIN.len();
         let widths: Vec<usize> = (0..span)
             .map(|f| {
                 strip_ansi(&frame_text(f, Duration::from_millis(1234)))
@@ -167,8 +186,8 @@ mod tests {
     /// 光带必须真的扫过文案的每一个字，而不是钉在某处
     #[test]
     fn 微光带扫过每一个字() {
-        let span = LABEL.chars().count() + 2;
-        let mut seen = vec![false; LABEL.chars().count()];
+        let span = TRANSLATION_LABEL.chars().count() + 2;
+        let mut seen = vec![false; TRANSLATION_LABEL.chars().count()];
         for f in 0..span * 2 {
             let p = peak(f);
             if p >= 0 && (p as usize) < seen.len() {
@@ -181,7 +200,7 @@ mod tests {
     /// 一个周期内波峰只能前进，不能来回弹 —— 来回弹看着犹豫
     #[test]
     fn 光带单向推进() {
-        let span = LABEL.chars().count() + 2;
+        let span = TRANSLATION_LABEL.chars().count() + 2;
         let seq: Vec<isize> = (0..span).map(|f| peak(f * 2)).collect();
         assert!(
             seq.windows(2).all(|w| w[1] > w[0]),

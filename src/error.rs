@@ -24,6 +24,10 @@ pub enum PoryError {
     #[error("翻译超时：整次调用超过 {0} 秒上限。可用 --timeout 调大上限")]
     TranslationTimeout(u64),
 
+    /// 词典 AI 候选链超过本次查词的总时限。
+    #[error("查词超时：整次调用超过 {0} 秒上限。可用 --timeout 调大上限")]
+    DictionaryTimeout(u64),
+
     /// 后端返回的数据格式不符合预期
     #[error("解析后端响应失败：{0}")]
     Parse(String),

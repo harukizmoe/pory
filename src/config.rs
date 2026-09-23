@@ -58,13 +58,12 @@ pub struct Config {
     /// 默认源语言，auto 表示自动检测
     pub source: String,
 
-    /// 是否使用翻译缓存。
+    /// 是否使用翻译结果和 AI 词条缓存。
     ///
-    /// 默认 `true`。设为 `false` 等价于每次调用都带上 `--no-cache` ——
-    /// 既不读已有译文，也不写入新的，每次都是真实请求。
+    /// 默认 `true`。设为 `false` 等价于每次调用都带上 `--no-cache`，
+    /// 既不读取旧结果，也不写入新结果。
     ///
-    /// 与命令行那三个开关的分工：命令行管「这一次」（`--no-cache` 本次不用、
-    /// `--refresh` 本次重来、`--clear-cache` 清空磁盘存量），这里管「以后每次都这样」。
+    /// 命令行开关控制单次调用；此字段控制后续每次调用。
     pub cache: bool,
 
     /// MyMemory 专用：联系邮箱（填了能提额度）
@@ -122,20 +121,11 @@ pub struct ProviderConfig {
     pub api_key: String,
     /// 可用模型列表。所有模型都进链、都可用（顺序即尝试顺序）
     pub models: Vec<String>,
-    /// 思考模式开关（三态）。
+    /// 是否启用该提供商的模型思考模式。
     ///
-    /// - `None`（缺省）：**不传参数**，用服务商的默认行为；
-    /// - `Some(false)`：请求体带 `enable_thinking = false`；
-    /// - `Some(true)`：请求体带 `enable_thinking = true`。
-    ///
-    /// 实测依据（2026-09-21，硅基流动）：Qwen3-8B 关思考后 22.9s → 1.43s
-    /// （输出 658 → 14 tokens）—— 思考是 AI 翻译慢的头号原因；
-    /// 翻译专用模型（Hunyuan-MT）不认识该参数但会**安全忽略**，传了无害。
-    ///
-    /// 该参数按硅基流动的 `enable_thinking` 字段实现；不支持此字段的服务商
-    /// 通常忽略未知参数（OpenAI 兼容层的惯例），如遇报错把它删掉即可。
-    /// 影响输出 → 必须进缓存键（见 ai.rs 的 cache_detail）。
-    pub thinking: Option<bool>,
+    /// 默认 `false` 会在请求中显式发送 `enable_thinking = false`，避免跟随服务商默认开启思考；
+    /// 设置为 `true` 可按提供商启用。该值影响结果，必须纳入缓存键。
+    pub thinking: bool,
 }
 
 /// 传统模式的配置块：免 Key 机翻的链顺序。
@@ -196,8 +186,8 @@ impl Default for ProviderConfig {
             base_url: "https://open.bigmodel.cn/api/paas/v4".to_string(),
             api_key: String::new(),
             models: vec!["glm-4.7-flash".to_string()],
-            // 默认不传思考参数：服务商怎么默认就怎么来（与引入该开关前行为一致）
-            thinking: None,
+            // 默认显式关闭思考模式，需要时可按提供商配置开启。
+            thinking: false,
         }
     }
 }
@@ -267,11 +257,10 @@ mode = "ai"
 # 同提供商的主力模型挂了，先试它的备选模型，再轮到下一家提供商。
 # 提供商名字限小写字母 / 数字 / 连字符（会进缓存键和脚注）。
 #
-# thinking（可选）：AI 思考模式开关。
-#   不写               = 不传参数，用服务商默认（Qwen3 系默认开思考，翻译慢很多）
-#   thinking = false   = 请求带 enable_thinking=false，关掉思考
-# 实测（硅基流动 2026-09-21）：Qwen3-8B 关思考 22.9s → 1.4s；
-# 翻译专用模型（Hunyuan-MT）不认识该参数但会安全忽略，传了无害。
+# thinking（默认 false）：只有设置为 true 才启用模型思考。
+# 默认请求显式发送 enable_thinking=false，避免跟随服务商默认开启慢思考。
+# 实测（硅基流动 2026-09-21）：Qwen3-8B 关思考后 22.9s → 1.4s；
+# 翻译专用模型（Hunyuan-MT）不认识该参数但会安全忽略。
 #
 # 免费档速查（2026-09 核实，政策易变，以各家控制台为准）：
 #   智谱 GLM    https://open.bigmodel.cn/api/paas/v4    glm-4.7-flash（永久免费，限 1 并发）
@@ -292,7 +281,7 @@ order = []
 # base_url = "https://api.siliconflow.cn/v1"
 # api_key = ""
 # models = ["tencent/Hunyuan-MT-7B", "Qwen/Qwen3-8B"]
-# thinking = false
+# thinking = true           # 需要时按提供商开启
 
 # ── 传统机翻（免 Key，永远可用）──
 # order 同时决定 mode=traditional 时的链顺序，和 mode=ai 时的兜底顺序。
@@ -315,9 +304,9 @@ secondary = "en"
 # 默认源语言，auto 表示自动检测
 source = "auto"
 
-# 是否使用翻译缓存（默认 true）。
-# 设为 false 等价于每次调用都带上 --no-cache：既不读已有译文，也不写入新的。
-# 适合两种场景：不想在磁盘上留缓存文件；或做对照测试、需要每次真实请求。
+# 是否使用翻译结果和 AI 词条缓存（默认 true）。
+# 设为 false 等价于每次调用都带上 --no-cache：既不读也不写缓存。
+# 适合不想在磁盘留结果，或需要每次真实请求的场景。
 cache = true
 
 # ── 零散设置 ──
@@ -590,12 +579,12 @@ thinking = false
         let p = cfg.ai.providers.get("zhipu").expect("应有 zhipu");
         assert_eq!(p.models, vec!["glm-4.7-flash", "glm-4.5-flash"]);
         assert_eq!(p.base_url, "https://open.bigmodel.cn/api/paas/v4");
-        assert_eq!(p.thinking, Some(false));
+        assert!(!p.thinking);
     }
 
-    /// thinking 缺省 = None（不传参数，服务商默认行为）
+    /// 未配置 thinking 时必须显式关闭服务商的默认思考模式。
     #[test]
-    fn thinking_缺省为_none() {
+    fn thinking_缺省为关闭() {
         let src = r#"
 [ai.zhipu]
 base_url = "https://x/v4"
@@ -603,7 +592,20 @@ models = ["m"]
 api_key = "k"
 "#;
         let cfg: Config = toml::from_str(src).unwrap();
-        assert_eq!(cfg.ai.providers.get("zhipu").unwrap().thinking, None);
+        assert!(!cfg.ai.providers.get("zhipu").unwrap().thinking);
+    }
+
+    #[test]
+    fn thinking_可由配置显式开启() {
+        let src = r#"
+[ai.zhipu]
+base_url = "https://x/v4"
+models = ["m"]
+api_key = "k"
+thinking = true
+"#;
+        let cfg: Config = toml::from_str(src).unwrap();
+        assert!(cfg.ai.providers.get("zhipu").unwrap().thinking);
     }
 
     /// 只有 [ai.zhipu] 没写 order → order 落默认空，providers 仍收集

@@ -18,8 +18,10 @@
 //! 定位是「高质量首选」，传统机翻是「永远能用的保底」。
 
 use crate::backend::{http_client, net_err, Backend, Request};
+use crate::config::{is_valid_provider_name, Config};
 use crate::error::{PoryError, Result};
 use serde::{Deserialize, Serialize};
+use std::collections::HashSet;
 
 /// AI 后端实例：一个 OpenAI 兼容提供商（名字 + 地址 + Key + 模型）
 pub struct Ai {
@@ -32,10 +34,8 @@ pub struct Ai {
     api_key: String,
     /// 模型名，比如 deepseek-chat、gpt-4o-mini
     model: String,
-    /// 思考模式开关。None = 不传参数（服务商默认）；
-    /// Some(false/true) = 请求体带 enable_thinking。
-    /// 影响输出 → 已通过 cache_detail 进缓存键。
-    thinking: Option<bool>,
+    /// 是否启用思考；默认 false，影响请求内容和缓存键。
+    thinking: bool,
 }
 
 impl Ai {
@@ -44,7 +44,7 @@ impl Ai {
         base_url: String,
         api_key: String,
         model: String,
-        thinking: Option<bool>,
+        thinking: bool,
     ) -> Self {
         Self {
             name,
@@ -120,6 +120,61 @@ impl Ai {
         format!("{head}{REQUIREMENTS}")
     }
 }
+/// 按配置顺序生成可用的 AI 模型，并保留跳过原因供调用方展示。
+#[derive(Default)]
+pub(crate) struct AiCandidates {
+    pub(crate) models: Vec<Ai>,
+    pub(crate) no_key: Vec<String>,
+    pub(crate) skipped: Vec<(String, String)>,
+}
+
+/// 翻译和词典共用同一份提供商、模型排序与校验规则。
+pub(crate) fn configured(cfg: &Config) -> AiCandidates {
+    let mut candidates = AiCandidates::default();
+    let mut seen = HashSet::new();
+
+    for name in &cfg.ai.order {
+        if !seen.insert(name) {
+            continue;
+        }
+        if !is_valid_provider_name(name) {
+            candidates.skipped.push((
+                name.clone(),
+                "名字不合法（只允许小写字母 / 数字 / 连字符）".into(),
+            ));
+            continue;
+        }
+        let Some(provider) = cfg.ai.providers.get(name) else {
+            candidates.skipped.push((
+                name.clone(),
+                "order 里列了名字，但 [ai] 下没有对应的配置表".into(),
+            ));
+            continue;
+        };
+        if provider.api_key.trim().is_empty() {
+            candidates.no_key.push(name.clone());
+            continue;
+        }
+        if provider.models.is_empty() {
+            candidates
+                .skipped
+                .push((name.clone(), "没有列出任何模型（models 为空）".into()));
+            continue;
+        }
+
+        for model in &provider.models {
+            candidates.models.push(Ai::new(
+                format!("{name}:{model}"),
+                provider.base_url.clone(),
+                provider.api_key.clone(),
+                model.clone(),
+                provider.thinking,
+            ));
+        }
+    }
+
+    candidates
+}
 
 /// 判断译文是不是**在复述我们的指令**，而不是翻译。
 ///
@@ -161,12 +216,10 @@ fn looks_like_prompt_echo(text: &str) -> bool {
 struct ChatRequest<'a> {
     model: &'a str,
     messages: Vec<Message<'a>>,
-    /// 温度给低一点，翻译要稳定不要发散
+    /// 降低随机性，让翻译和结构化词条输出更稳定。
     temperature: f32,
-    /// 思考模式开关（混合推理模型如 Qwen3 系认这个字段；不支持的服务商
-    /// 实测会安全忽略）。None 时整个字段省略，保持请求体与从前一致。
-    #[serde(skip_serializing_if = "Option::is_none")]
-    enable_thinking: Option<bool>,
+    /// 显式发送开关，避免服务商的默认值意外开启思考模式。
+    enable_thinking: bool,
 }
 
 #[derive(Serialize)]
@@ -201,15 +254,12 @@ impl Backend for Ai {
     /// 把模型名纳入缓存键 —— 换模型后必须重新翻译，
     /// 否则会命中旧模型的译文（风格差异会很明显）。
     ///
-    /// 思考模式同样影响输出，必须一起进键：
-    /// `model`（未配置）/ `model/think` / `model/no-think`。
-    /// 不进键的后果：关思考后同一段文字会命中开思考时的旧缓存 ——
-    /// 慢的旧译文挡住新的快路径，与 v2→v3 修的「中翻中脏缓存」同型。
+    /// 思考模式影响输出，必须进入缓存键，避免开关状态互相命中。
     fn cache_detail(&self) -> String {
-        match self.thinking {
-            None => self.model.clone(),
-            Some(true) => format!("{}/think", self.model),
-            Some(false) => format!("{}/no-think", self.model),
+        if self.thinking {
+            format!("{}/think", self.model)
+        } else {
+            format!("{}/no-think", self.model)
         }
     }
 
@@ -229,30 +279,25 @@ impl Backend for Ai {
 }
 
 impl Ai {
-    async fn do_translate(&self, req: Request) -> Result<String> {
+    /// 发送一组 OpenAI 兼容对话消息，返回模型原始文本。
+    pub(crate) async fn complete(&self, system: &str, user: &str) -> Result<String> {
         let url = format!("{}/chat/completions", self.base_url);
-        let prompt = Self::build_prompt(&req);
-        // 正文包进 <text> 标签，与 prompt 里的说法对应（见 build_prompt 的说明）
-        let user_content = format!("<text>{}</text>", req.text);
-
         let body = ChatRequest {
             model: &self.model,
             messages: vec![
                 Message {
                     role: "system",
-                    content: &prompt,
+                    content: system,
                 },
                 Message {
                     role: "user",
-                    content: &user_content,
+                    content: user,
                 },
             ],
             temperature: 0.3,
             enable_thinking: self.thinking,
         };
 
-        // 经统一的构造函数建客户端，才有超时兜底（见 backend/mod.rs 的说明）。
-        // 大模型比机翻慢，30 秒是给它留的余量。
         let client = http_client()?;
         let resp = client
             .post(&url)
@@ -265,7 +310,6 @@ impl Ai {
 
         let status = resp.status();
         if !status.is_success() {
-            // 把服务端返回的错误正文读出来，方便定位（比如 key 无效、余额不足）
             let detail = resp.text().await.unwrap_or_default();
             return Err(PoryError::Backend(format!(
                 "AI 后端返回 HTTP {status}：{}",
@@ -278,16 +322,22 @@ impl Ai {
             .await
             .map_err(|e| PoryError::Parse(format!("AI 响应结构异常：{e}")))?;
 
-        let content = parsed
+        parsed
             .choices
             .into_iter()
             .next()
-            .map(|c| c.message.content.trim().to_string())
-            .filter(|s| !s.is_empty())
-            .ok_or_else(|| PoryError::Backend("AI 后端返回了空回复".into()))?;
+            .map(|choice| choice.message.content.trim().to_string())
+            .filter(|content| !content.is_empty())
+            .ok_or_else(|| PoryError::Backend("AI 后端返回了空回复".into()))
+    }
 
-        // 复述指令 = 彻底的垃圾，宁可判失败让回退链继续，也别当译文交出去
-        // （返回 Err 还顺带保证它不会进缓存）
+    async fn do_translate(&self, req: Request) -> Result<String> {
+        let prompt = Self::build_prompt(&req);
+        // 正文包进 <text> 标签，与 prompt 里的说法对应。
+        let user_content = format!("<text>{}</text>", req.text);
+        let content = self.complete(&prompt, &user_content).await?;
+
+        // 复述指令不是译文，宁可回退也不把它当结果交出去。
         if looks_like_prompt_echo(&content) {
             return Err(PoryError::Backend(format!(
                 "{} 复述了翻译指令而不是翻译正文（已判为失败）。该模型的指令跟随不稳定，\
@@ -304,6 +354,27 @@ impl Ai {
 mod tests {
     use super::*;
     use crate::lang::Lang;
+    #[test]
+    fn thinking_flag_is_explicit_in_request() {
+        let provider = crate::config::ProviderConfig::default();
+        let request = ChatRequest {
+            model: "test",
+            messages: Vec::new(),
+            temperature: 0.3,
+            enable_thinking: provider.thinking,
+        };
+        let value = serde_json::to_value(request).unwrap();
+        assert_eq!(value["enable_thinking"], serde_json::Value::Bool(false));
+
+        let enabled = ChatRequest {
+            model: "test",
+            messages: Vec::new(),
+            temperature: 0.3,
+            enable_thinking: true,
+        };
+        let value = serde_json::to_value(enabled).unwrap();
+        assert_eq!(value["enable_thinking"], serde_json::Value::Bool(true));
+    }
 
     fn req(from: &str, to: &str, alt: Option<&str>) -> Request {
         Request {
@@ -394,22 +465,20 @@ mod tests {
         assert!(!looks_like_prompt_echo("这份提示词要求：只输出译文本身。"));
     }
 
-    /// 思考开关进缓存键：三态必须产出三个不同的键后缀，
-    /// 否则关思考会命中开思考时的慢缓存（与中翻中脏缓存同型的事故）
+    /// 缓存键区分默认关闭与显式开启的思考模式。
     #[test]
     fn 思考开关进缓存键() {
-        let mk = |th: Option<bool>| {
+        let mk = |thinking: bool| {
             Ai::new(
                 "sf:Qwen3-8B".into(),
                 "https://x/v4".into(),
                 "k".into(),
                 "Qwen3-8B".into(),
-                th,
+                thinking,
             )
         };
-        assert_eq!(mk(None).cache_detail(), "Qwen3-8B");
-        assert_eq!(mk(Some(false)).cache_detail(), "Qwen3-8B/no-think");
-        assert_eq!(mk(Some(true)).cache_detail(), "Qwen3-8B/think");
-        assert_ne!(mk(None).cache_detail(), mk(Some(false)).cache_detail());
+        assert_eq!(mk(false).cache_detail(), "Qwen3-8B/no-think");
+        assert_eq!(mk(true).cache_detail(), "Qwen3-8B/think");
+        assert_ne!(mk(false).cache_detail(), mk(true).cache_detail());
     }
 }

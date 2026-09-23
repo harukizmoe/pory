@@ -1,14 +1,14 @@
 [package]
 name = "pory"
-version = "0.2.1"
+version = "0.3.0"
 edition = "2021"
 # 包元数据用英文：README 是三语的（英文为主 + zh-CN + ja），但 description 与
 # keywords 只有一份，取通用语言。运行时提示与源码注释仍是中文。
-description = "A terminal translator with two modes (key-free out of the box, or any OpenAI-compatible AI), chunk-level caching and automatic fallback"
+description = "A terminal translator with optional AI dictionary lookup, configurable OpenAI-compatible backends, caching and fallback"
 license = "MIT"
 repository = "https://github.com/harukizmoe/pory"
 readme = "README.md"
-keywords = ["translation", "translator", "cli", "i18n", "terminal"]
+keywords = ["translation", "translator", "dictionary", "lookup", "cli", "i18n", "terminal"]
 categories = ["command-line-utilities"]
 
 [dependencies]

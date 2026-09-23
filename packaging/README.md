@@ -16,7 +16,7 @@
 
 ```bash
 # 发版前先更新 Cargo.toml 与 PKGBUILD，并将版本号设为新版本。
-PORY_VERSION=0.2.2
+PORY_VERSION=0.3.0
 
 # 1) 在 WSL 里构建并打包（项目本身就在 WSL 的 ext4 上，直接编即可）
 cd ~/workspace/tools/pory
