@@ -209,10 +209,8 @@ impl Cache {
         }
 
         // 按时间从新到旧排序，保留前 80%
-        let mut by_time: Vec<(String, u64)> = entries
-            .iter()
-            .map(|(k, e)| (k.clone(), e.at))
-            .collect();
+        let mut by_time: Vec<(String, u64)> =
+            entries.iter().map(|(k, e)| (k.clone(), e.at)).collect();
         by_time.sort_by_key(|(_, at)| std::cmp::Reverse(*at));
 
         let keep: HashSet<String> = by_time

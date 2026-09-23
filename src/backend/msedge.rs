@@ -111,7 +111,10 @@ impl MsEdge {
                 let (swapped, _) = self.fetch(&req.text, None, &alt_code).await?;
                 return Ok(swapped);
             }
-            eprintln!("⚠ 原文已经是目标语言（{}），原样返回", detected.unwrap_or(to));
+            eprintln!(
+                "⚠ 原文已经是目标语言（{}），原样返回",
+                detected.unwrap_or(to)
+            );
             return Ok(req.text.clone());
         }
 
@@ -122,7 +125,12 @@ impl MsEdge {
     ///
     /// 拆出来是因为「换向」要再发一次同样的请求、只换目标语言 ——
     /// 收发逻辑只该有一份。
-    async fn fetch(&self, text: &str, from: Option<&str>, to: &str) -> Result<(String, Option<String>)> {
+    async fn fetch(
+        &self,
+        text: &str,
+        from: Option<&str>,
+        to: &str,
+    ) -> Result<(String, Option<String>)> {
         let url = Self::build_url(from, to);
 
         // body 是纯字符串数组 —— 用 Azure 文档的 [{"Text":...}] 会吃 400

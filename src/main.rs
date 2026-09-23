@@ -90,6 +90,10 @@ struct Cli {
     #[arg(long)]
     refresh: bool,
 
+    /// Maximum wall-clock time for one translation, in seconds (default: 300; range: 1-86400)
+    #[arg(long, value_name = "SECONDS", value_parser = parse_timeout_secs)]
+    timeout: Option<u64>,
+
     /// Clear the translation cache and exit
     #[arg(long)]
     clear_cache: bool,
@@ -294,13 +298,26 @@ async fn run(cli: Cli) -> Result<()> {
     if cli.refresh {
         translator = translator.with_refresh(true);
     }
+    if let Some(seconds) = cli.timeout {
+        translator = translator.with_timeout(std::time::Duration::from_secs(seconds));
+    }
 
     let result = if !cli.plain && progress::enabled() {
         // 终端里带等待动画。管道 / CI / 重定向里 stderr 不是终端，
         // 这条分支根本不会走 —— 那些场景的行为与加动画之前完全一致。
-        translate_with_progress(&mut translator, &job).await?
+        translate_with_progress(&mut translator, &job).await
     } else {
-        translator.run(&job).await?
+        translator.run(&job).await
+    };
+    let result = match result {
+        Ok(result) => result,
+        Err(error) => {
+            // 超时或后续块失败时也保留此前发生的回退信息。
+            for warning in &translator.stats().warnings {
+                eprintln!("⚠ {warning}");
+            }
+            return Err(error);
+        }
     };
 
     // ── 6. 输出 ──
@@ -393,7 +410,13 @@ fn try_set_mode(cli: &Cli) -> Result<Option<(Mode, std::path::PathBuf)>> {
     let Some(name) = cli.backend.as_deref() else {
         return Ok(None);
     };
-    if cli.target.is_some() || cli.from.is_some() || cli.plain || cli.no_cache || cli.refresh {
+    if cli.target.is_some()
+        || cli.from.is_some()
+        || cli.plain
+        || cli.no_cache
+        || cli.refresh
+        || cli.timeout.is_some()
+    {
         return Ok(None);
     }
 
@@ -411,6 +434,18 @@ fn parse_mode(name: &str) -> Result<Mode> {
         other => Err(PoryError::Config(format!(
             "未知翻译模式 `{other}`。可用：ai / traditional"
         ))),
+    }
+}
+
+/// Parse the total translation timeout. Bound it to one day to avoid instant overflow.
+fn parse_timeout_secs(value: &str) -> std::result::Result<u64, String> {
+    let seconds = value
+        .parse::<u64>()
+        .map_err(|_| "timeout must be a positive integer".to_string())?;
+    if (1..=86_400).contains(&seconds) {
+        Ok(seconds)
+    } else {
+        Err("timeout must be between 1 and 86400 seconds".to_string())
     }
 }
 
@@ -985,7 +1020,10 @@ mod tests {
             Ok(_) => panic!("链为空，应当报错"),
             Err(e) => e.to_string(),
         };
-        assert!(msg.contains("传统后端"), "应指明是传统列表的问题，实际：{msg}");
+        assert!(
+            msg.contains("传统后端"),
+            "应指明是传统列表的问题，实际：{msg}"
+        );
     }
 
     /// order 里写重复 → 去重（同一条链里同名后端出现两次没有意义）
@@ -1102,6 +1140,9 @@ mod tests {
         stats.backends = vec!["ai".to_string(), "mymemory".to_string()];
         let note = footnote(&任务("zh", "en", None), &stats, false, true);
         assert!(note.contains("ai → mymemory"), "实际：{note}");
-        assert!(stats.backends.len() > 1, "这正是 print_result 判 Amber 的依据");
+        assert!(
+            stats.backends.len() > 1,
+            "这正是 print_result 判 Amber 的依据"
+        );
     }
 }

@@ -20,7 +20,8 @@
 use crate::error::{PoryError, Result};
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
-use std::path::PathBuf;
+use std::io::Write;
+use std::path::{Path, PathBuf};
 
 /// 翻译模式。
 ///
@@ -157,7 +158,9 @@ pub const TRADITIONAL_KNOWN: [&str; 4] = ["msedge", "transmart", "mymemory", "go
 /// TOML 表名本身合法性由 toml 解析器把关，这里只做额外收紧。
 pub fn is_valid_provider_name(name: &str) -> bool {
     !name.is_empty()
-        && name.chars().all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || c == '-')
+        && name
+            .chars()
+            .all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || c == '-')
 }
 
 impl Default for Config {
@@ -347,8 +350,24 @@ cache = true
             )));
         }
 
-        std::fs::write(&path, Self::template())
-            .map_err(|e| PoryError::Config(format!("写入配置失败：{e}")))?;
+        let mut options = std::fs::OpenOptions::new();
+        options.write(true).create_new(true);
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::OpenOptionsExt;
+            // 配置中可能包含 API Key。不要让常见的 umask 022 创建出 0644 文件。
+            options.mode(0o600);
+        }
+
+        let mut file = options.open(&path).map_err(|e| {
+            if e.kind() == std::io::ErrorKind::AlreadyExists {
+                PoryError::Config(format!("配置文件已存在：{}（未覆盖）", path.display()))
+            } else {
+                PoryError::Config(format!("写入配置失败 {}：{e}", path.display()))
+            }
+        })?;
+        file.write_all(Self::template().as_bytes())
+            .map_err(|e| PoryError::Config(format!("写入配置失败 {}：{e}", path.display())))?;
 
         Ok(path)
     }
@@ -372,12 +391,32 @@ cache = true
             .map_err(|e| PoryError::Config(format!("读取配置失败 {}：{e}", path.display())))?;
 
         let updated = replace_top_level(&content, "mode", mode_marker(mode));
+        restrict_config_permissions(&path)?;
 
         std::fs::write(&path, updated)
             .map_err(|e| PoryError::Config(format!("写入配置失败 {}：{e}", path.display())))?;
 
         Ok(path)
     }
+}
+
+/// 收紧已有配置文件的权限。设置默认模式时也会修正老配置文件的权限。
+#[cfg(unix)]
+fn restrict_config_permissions(path: &Path) -> Result<()> {
+    use std::os::unix::fs::PermissionsExt;
+
+    let mut permissions = std::fs::metadata(path)
+        .map_err(|e| PoryError::Config(format!("读取配置文件权限失败 {}：{e}", path.display())))?
+        .permissions();
+    permissions.set_mode(0o600);
+    std::fs::set_permissions(path, permissions)
+        .map_err(|e| PoryError::Config(format!("收紧配置文件权限失败 {}：{e}", path.display())))
+}
+
+#[cfg(not(unix))]
+fn restrict_config_permissions(_path: &Path) -> Result<()> {
+    // Windows 使用继承的用户 ACL；Unix 的 0600 权限位不适用。
+    Ok(())
 }
 
 /// Mode 的配置文件写法（小写字符串，与 serde 序列化一致）

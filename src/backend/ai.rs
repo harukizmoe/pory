@@ -364,7 +364,10 @@ mod tests {
     #[test]
     fn 显式源语言的_prompt_带源语种() {
         let p = Ai::build_prompt(&req("zh-CN", "en", None));
-        assert!(p.contains("把 <text> 标签里的简体中文内容翻译成英语"), "{p}");
+        assert!(
+            p.contains("把 <text> 标签里的简体中文内容翻译成英语"),
+            "{p}"
+        );
     }
 
     /// 复述指令的判定：要命中两条以上才算，避免误伤「正在翻译一份提示词文档」
@@ -388,9 +391,7 @@ mod tests {
         assert!(!looks_like_prompt_echo("The terminal is quiet."));
 
         // 只命中一条 → 不算（可能是用户在翻译提示词文档）
-        assert!(!looks_like_prompt_echo(
-            "这份提示词要求：只输出译文本身。"
-        ));
+        assert!(!looks_like_prompt_echo("这份提示词要求：只输出译文本身。"));
     }
 
     /// 思考开关进缓存键：三态必须产出三个不同的键后缀，

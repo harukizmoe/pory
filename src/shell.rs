@@ -79,7 +79,9 @@ pub fn run(shell: &str, print_only: bool) -> Result<String> {
             let (rc, added) = append_rc("zsh")?;
             // 说明走 stderr：`pory --init-shell zsh > _pory` 的 stdout 必须仍是一份干净脚本
             eprintln!("ℹ zsh 补全未自动安装：位置由你 .zshrc 里的 $fpath 决定。");
-            eprintln!("  把以上内容存为 `_pory` 放进 $fpath 的某个目录（例如 ~/.zsh/completions/），");
+            eprintln!(
+                "  把以上内容存为 `_pory` 放进 $fpath 的某个目录（例如 ~/.zsh/completions/），"
+            );
             eprintln!("  并在 ~/.zshrc 里加：fpath=(~/.zsh/completions $fpath)");
             eprintln!(
                 "  短名：{} —— {}",
@@ -103,8 +105,8 @@ pub fn run(shell: &str, print_only: bool) -> Result<String> {
 /// 别名要给**交互式 shell** 用，所以是 `.bashrc` —— `.bash_profile` 只在登录
 /// shell 里读，把它当目标会让「开个新终端没有短名」这种玄学问题出现。
 fn rc_path_for(shell: &str) -> Result<PathBuf> {
-    let dirs = directories::BaseDirs::new()
-        .ok_or_else(|| PoryError::Config("无法定位用户目录".into()))?;
+    let dirs =
+        directories::BaseDirs::new().ok_or_else(|| PoryError::Config("无法定位用户目录".into()))?;
     Ok(match shell {
         "bash" => dirs.home_dir().join(".bashrc"),
         _ => dirs.home_dir().join(".zshrc"),
@@ -244,15 +246,13 @@ fn remove_rc_block(rc: &Path) -> Result<bool> {
 
 /// 按 shell 的标准位置算安装路径（尊重 XDG 变量）。
 fn install_path(shell: &str) -> Result<PathBuf> {
-    let dirs = directories::BaseDirs::new()
-        .ok_or_else(|| PoryError::Config("无法定位用户目录".into()))?;
+    let dirs =
+        directories::BaseDirs::new().ok_or_else(|| PoryError::Config("无法定位用户目录".into()))?;
     Ok(match shell {
         // fish 启动时自动加载该目录下的补全
         "fish" => dirs.config_dir().join("fish/completions/pory.fish"),
         // bash-completion 的官方用户级目录（bash-completion 包会自动加载）
-        "bash" => dirs
-            .data_dir()
-            .join("bash-completion/completions/pory"),
+        "bash" => dirs.data_dir().join("bash-completion/completions/pory"),
         other => {
             return Err(PoryError::Input(format!(
                 "`{other}` 没有可自动安装的补全位置。可用的 shell：fish / bash（zsh 请用 --print）"
@@ -275,9 +275,8 @@ fn write_checked(path: &Path, script: &str) -> Result<()> {
     }
 
     if let Some(parent) = path.parent() {
-        std::fs::create_dir_all(parent).map_err(|e| {
-            PoryError::Config(format!("无法创建目录 {}：{e}", parent.display()))
-        })?;
+        std::fs::create_dir_all(parent)
+            .map_err(|e| PoryError::Config(format!("无法创建目录 {}：{e}", parent.display())))?;
     }
 
     std::fs::write(path, script)
@@ -373,6 +372,7 @@ complete -c pory -s b -l backend -x -a "ai traditional" -d "Translation mode"
 complete -c pory -l plain -d "Print the translation only: no color, no footnote, no animation"
 complete -c pory -l no-cache -d "Skip the cache for this call"
 complete -c pory -l refresh -d "Ignore existing cache and re-translate"
+complete -c pory -l timeout -r -d "Overall translation limit in seconds"
 complete -c pory -l clear-cache -d "Clear the translation cache and exit"
 complete -c pory -l init -d "Write a sample config file and exit"
 complete -c pory -l init-shell -x -a "fish bash zsh" -d "Install shell integration and exit"
@@ -414,10 +414,13 @@ _pory_complete() {
         --init-shell)
             COMPREPLY=( $(compgen -W "fish bash zsh" -- "$cur") )
             return ;;
+        --timeout)
+            COMPREPLY=( $(compgen -W "60 300 600 900" -- "$cur") )
+            return ;;
     esac
 
     COMPREPLY=( $(compgen -W "-t --target -f --from -b --backend \
---plain --no-cache --refresh --clear-cache --init --init-shell --print \
+-timeout --plain --no-cache --refresh --clear-cache --init --init-shell --print \
 -h --help -V --version" -- "$cur") )
 }
 
@@ -451,6 +454,7 @@ _pory() {
         '(-t --target)'{-t,--target}'[Target language]:language:(__LANGS__)' \
         '(-f --from)'{-f,--from}'[Source language (default: auto)]:language:(auto __LANGS__)' \
         '(-b --backend)'{-b,--backend}'[Translation mode]:mode:(ai traditional)' \
+        '--timeout[Overall translation limit in seconds]:seconds:' \
         '--plain[Print the translation only: no color, no footnote, no animation]' \
         '--no-cache[Skip the cache for this call]' \
         '--refresh[Ignore existing cache and re-translate]' \
@@ -478,7 +482,10 @@ mod tests {
 
         let bash = integration("bash").unwrap();
         assert!(!bash.contains("alias pr"), "bash 不该有短名");
-        assert!(bash.contains("complete -F _pory_complete pory"), "bash 缺注册");
+        assert!(
+            bash.contains("complete -F _pory_complete pory"),
+            "bash 缺注册"
+        );
         assert!(bash.contains("ai traditional"), "bash 缺模式候选");
 
         let zsh = integration("zsh").unwrap();
@@ -672,7 +679,10 @@ mod tests {
         let after = std::fs::read_to_string(&rc).unwrap();
         assert!(!after.contains(RC_MARKER), "标记行应删掉");
         assert!(!after.contains("alias pr=pory"), "别名行应删掉");
-        assert!(after.contains("# 我的配置"), "用户原有内容必须保留：{after}");
+        assert!(
+            after.contains("# 我的配置"),
+            "用户原有内容必须保留：{after}"
+        );
         assert!(after.contains("export FOO=1"), "{after}");
         assert!(
             after.contains("# 我后来又加的一行") && after.contains("export BAR=2"),

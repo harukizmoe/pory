@@ -22,7 +22,7 @@ pub struct Lang(String);
 ///
 /// 这张表可以随时扩。挑的都是常用语种 + 翻译质量较好的。
 const SUPPORTED: &[(&str, &str)] = &[
-    ("zh", "zh-CN"),   // 简体中文
+    ("zh", "zh-CN"), // 简体中文
     ("zh-cn", "zh-CN"),
     ("zh-tw", "zh-TW"), // 繁体中文
     ("en", "en"),
@@ -89,11 +89,7 @@ impl Lang {
     /// 转换成 MyMemory 需要的格式：它只要两位主语言码，`zh-CN` 要变成 `zh`
     pub fn to_mymemory(&self) -> String {
         // 按 '-' 切分取第一段，再转小写
-        self.0
-            .split('-')
-            .next()
-            .unwrap_or(&self.0)
-            .to_lowercase()
+        self.0.split('-').next().unwrap_or(&self.0).to_lowercase()
     }
 
     /// 转换成微软翻译（Edge 端点）的格式。

@@ -99,12 +99,7 @@ impl Google {
     /// 发一次请求，返回 `(译文, 检测到的源语言)`。
     ///
     /// 抽出来是因为「换向」要再发一次、只换目标语言；收发逻辑只该有一份。
-    async fn fetch(
-        &self,
-        text: &str,
-        sl: &str,
-        tl: &str,
-    ) -> Result<(String, Option<String>)> {
+    async fn fetch(&self, text: &str, sl: &str, tl: &str) -> Result<(String, Option<String>)> {
         let url = format!(
             "{}?client=gtx&dt=t&sl={}&tl={}&q={}",
             self.endpoint,
@@ -133,7 +128,8 @@ impl Google {
         let trimmed = raw.trim_start();
         if trimmed.starts_with("<!DOCTYPE") || trimmed.starts_with("<html") {
             return Err(PoryError::Backend(
-                "Google 返回了 HTML 页面（多半是验证码或风控拦截），请稍后重试或改用其他后端".into(),
+                "Google 返回了 HTML 页面（多半是验证码或风控拦截），请稍后重试或改用其他后端"
+                    .into(),
             ));
         }
 
@@ -149,7 +145,11 @@ impl Google {
         let mut out = String::new();
         for seg in segments {
             // 每段本身也是数组，第 0 位才是译文。有些段是 null，跳过。
-            if let Some(piece) = seg.as_array().and_then(|a| a.first()).and_then(|v| v.as_str()) {
+            if let Some(piece) = seg
+                .as_array()
+                .and_then(|a| a.first())
+                .and_then(|v| v.as_str())
+            {
                 out.push_str(piece);
             }
         }
@@ -159,10 +159,7 @@ impl Google {
         }
 
         // res[2] 是检测到的源语言码（如 "zh-CN"）：结构注释里那个 `null,"zh-CN"`
-        let detected = json
-            .get(2)
-            .and_then(|v| v.as_str())
-            .map(|s| s.to_string());
+        let detected = json.get(2).and_then(|v| v.as_str()).map(|s| s.to_string());
 
         Ok((out, detected))
     }

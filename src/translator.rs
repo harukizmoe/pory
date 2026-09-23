@@ -14,6 +14,10 @@ use crate::backend::{Backend, Request};
 use crate::cache::Cache;
 use crate::error::{PoryError, Result};
 use crate::lang::Lang;
+use std::time::Duration;
+
+/// 整次翻译的默认墙钟上限。单个后端请求仍受各自的 30 秒超时约束。
+pub const DEFAULT_TRANSLATION_TIMEOUT: Duration = Duration::from_secs(300);
 
 /// 一次翻译任务的全部参数
 pub struct TranslateJob {
@@ -87,6 +91,8 @@ pub struct Translator {
     warnings: Vec<String>,
     /// 本次 run() 的墙钟耗时（见 `Stats::duration`）
     duration: std::time::Duration,
+    /// 所有文本块与回退请求共享的整次调用时限。
+    timeout: Duration,
 }
 
 impl Translator {
@@ -101,7 +107,14 @@ impl Translator {
             backends_used: Vec::new(),
             warnings: Vec::new(),
             duration: std::time::Duration::ZERO,
+            timeout: DEFAULT_TRANSLATION_TIMEOUT,
         }
+    }
+
+    /// 设置整次翻译的墙钟上限。
+    pub fn with_timeout(mut self, timeout: Duration) -> Self {
+        self.timeout = timeout;
+        self
     }
 
     /// 启用缓存（链式调用）
@@ -136,6 +149,7 @@ impl Translator {
 
         // 墙钟计时从切块前开始（切块也是翻译过程的一部分）
         let start = std::time::Instant::now();
+        let deadline = tokio::time::Instant::now() + self.timeout;
 
         // 切分粒度取后端链里**最保守**的那个上限。
         // 因为切分发生在「还不知道会用哪个后端」的阶段，
@@ -153,10 +167,20 @@ impl Translator {
 
         // 串行发送。为什么不用并发？免费接口对并发很敏感，
         // 同时发 5 个请求很容易触发限流。串行慢一点但稳。
+        let mut timed_out = false;
         for chunk in &chunks {
-            let (out, outcome) = self
-                .translate_one(chunk, &job.from, &job.to, &job.to_if_same)
-                .await?;
+            let translated = tokio::time::timeout_at(
+                deadline,
+                self.translate_one(chunk, &job.from, &job.to, &job.to_if_same),
+            )
+            .await;
+            let (out, outcome) = match translated {
+                Ok(result) => result?,
+                Err(_) => {
+                    timed_out = true;
+                    break;
+                }
+            };
 
             // 累计统计
             if outcome.from_cache {
@@ -186,7 +210,11 @@ impl Translator {
         // 耗时含缓存落盘 —— 用户看到的「翻译用了多久」应当是完整墙钟时间
         self.duration = start.elapsed();
 
-        Ok(results.join("\n"))
+        if timed_out {
+            Err(PoryError::TranslationTimeout(self.timeout.as_secs()))
+        } else {
+            Ok(results.join("\n"))
+        }
     }
 
     /// 翻译单个块，沿后端链依次尝试。
@@ -270,8 +298,7 @@ impl Translator {
                     // 还有备选就记一条警告；已是最后一个则静默
                     // （错误最终会返回给用户，不必重复说）
                     if let Some(next) = self.backends.get(idx + 1) {
-                        let msg =
-                            format!("{} 失败，回退到 {}：{e}", backend.name(), next.name());
+                        let msg = format!("{} 失败，回退到 {}：{e}", backend.name(), next.name());
                         self.warnings.push(msg);
                     }
                     last_err = Some(e);

@@ -34,7 +34,9 @@ pub fn build_traditional(name: &str, cfg: &Config) -> Result<Box<dyn Backend>> {
     match name {
         "msedge" => Ok(Box::new(msedge::MsEdge::new())),
         "transmart" => Ok(Box::new(transmart::Transmart::new())),
-        "mymemory" => Ok(Box::new(mymemory::MyMemory::new(cfg.mymemory_email.clone()))),
+        "mymemory" => Ok(Box::new(mymemory::MyMemory::new(
+            cfg.mymemory_email.clone(),
+        ))),
         "google" => Ok(Box::new(google::Google::new(cfg.google_endpoint.clone()))),
         other => Err(PoryError::Config(format!(
             "未知的传统后端 `{other}`。可用：{}",

@@ -15,6 +15,9 @@
 ### 发一个新版本
 
 ```bash
+# 发版前先更新 Cargo.toml 与 PKGBUILD，并将版本号设为新版本。
+PORY_VERSION=0.2.2
+
 # 1) 在 WSL 里构建并打包（项目本身就在 WSL 的 ext4 上，直接编即可）
 cd ~/workspace/tools/pory
 cargo build --release --locked
@@ -29,11 +32,11 @@ sha256sum pory-x86_64-unknown-linux-gnu.tar.gz | cut -d" " -f1 \
 
 # 2) 打 tag 并发 Release（资产名必须与 PKGBUILD 里引用的完全一致）
 cd ~/workspace/tools/pory
-git tag -a v0.1.0 -m "pory 0.1.0" && git push origin v0.1.0
-gh release create v0.1.0 \
+git tag -a "v${PORY_VERSION}" -m "pory ${PORY_VERSION}" && git push origin "v${PORY_VERSION}"
+gh release create "v${PORY_VERSION}" \
   /tmp/pory-rel/pory-x86_64-unknown-linux-gnu.tar.gz \
   /tmp/pory-rel/pory-x86_64-unknown-linux-gnu.tar.gz.sha256 \
-  --title "pory 0.1.0" --notes "…"
+  --title "pory ${PORY_VERSION}" --notes "…"
 
 # 3) 把新的 sha256 填回 PKGBUILD（pkgver 同时更新）
 ```
@@ -48,7 +51,7 @@ cp LICENSE ~/aur/pory-bin/
 cd ~/aur/pory-bin
 makepkg --printsrcinfo > .SRCINFO
 git add PKGBUILD .SRCINFO LICENSE
-git commit -m "pory-bin 0.1.0-1"
+git commit -m "pory-bin ${PORY_VERSION}-1"
 git push
 
 # 之后每次更新：改 pkgver + sha256sums → 重新生成 .SRCINFO → commit → push

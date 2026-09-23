@@ -251,7 +251,10 @@ mod tests {
         assert_eq!(body["type"], "plain");
 
         let key = body["header"]["client_key"].as_str().unwrap();
-        assert!(key.starts_with("browser-chrome-131.0.0-Windows_10-"), "{key}");
+        assert!(
+            key.starts_with("browser-chrome-131.0.0-Windows_10-"),
+            "{key}"
+        );
         // 按 '-' 全切：前 4 段是前缀（browser / chrome / 131.0.0 / Windows_10），
         // 接着 5 段是 uuid（8-4-4-4-12），最后一段是毫秒时间戳
         let parts: Vec<&str> = key.split('-').collect();
