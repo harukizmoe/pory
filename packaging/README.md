@@ -15,11 +15,11 @@
 ### 发一个新版本
 
 ```bash
-# 1) 在 WSL 里构建并打包（必须在 WSL 里做，见仓库根的开发说明）
-cd /mnt/d/PersonalSpace/worspace/pory
-CARGO_TARGET_DIR=~/.cache/pory-target cargo build --release --locked
+# 1) 在 WSL 里构建并打包（项目本身就在 WSL 的 ext4 上，直接编即可）
+cd ~/workspace/tools/pory
+cargo build --release --locked
 rm -rf /tmp/pory-rel && mkdir -p /tmp/pory-rel/pory-x86_64-unknown-linux-gnu
-cp ~/.cache/pory-target/release/pory LICENSE README.md /tmp/pory-rel/pory-x86_64-unknown-linux-gnu/
+cp target/release/pory LICENSE README.md /tmp/pory-rel/pory-x86_64-unknown-linux-gnu/
 cd /tmp/pory-rel
 chmod 755 pory-x86_64-unknown-linux-gnu pory-x86_64-unknown-linux-gnu/pory
 chmod 644 pory-x86_64-unknown-linux-gnu/README.md pory-x86_64-unknown-linux-gnu/LICENSE
@@ -28,7 +28,7 @@ sha256sum pory-x86_64-unknown-linux-gnu.tar.gz | cut -d" " -f1 \
   > pory-x86_64-unknown-linux-gnu.tar.gz.sha256
 
 # 2) 打 tag 并发 Release（资产名必须与 PKGBUILD 里引用的完全一致）
-cd /mnt/d/PersonalSpace/worspace/pory
+cd ~/workspace/tools/pory
 git tag -a v0.1.0 -m "pory 0.1.0" && git push origin v0.1.0
 gh release create v0.1.0 \
   /tmp/pory-rel/pory-x86_64-unknown-linux-gnu.tar.gz \
