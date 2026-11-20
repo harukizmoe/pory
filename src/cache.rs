@@ -90,8 +90,12 @@ impl Cache {
                 dirty: false,
             };
         };
+        Self::load_from(&path)
+    }
 
-        let entries = match std::fs::read_to_string(&path) {
+    /// 从指定路径加载。`load` 与测试共用，避免测试读写真实的用户缓存目录。
+    fn load_from(path: &std::path::Path) -> Self {
+        let entries = match std::fs::read_to_string(path) {
             Ok(content) => match serde_json::from_str::<CacheFile>(&content) {
                 // 版本不匹配 → 丢弃旧缓存（结构可能已变，不冒险解析）
                 Ok(file) if file.version == FORMAT_VERSION => file.entries,
@@ -103,10 +107,16 @@ impl Cache {
         };
 
         Self {
-            path,
+            path: path.to_path_buf(),
             entries,
             dirty: false,
         }
+    }
+
+    /// 测试专用：把缓存指向给定文件（存在则加载，不存在则为空）。
+    #[cfg(test)]
+    pub(crate) fn at(path: &std::path::Path) -> Self {
+        Self::load_from(path)
     }
 
     /// 查询缓存。未命中返回 None。
