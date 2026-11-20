@@ -4,7 +4,8 @@
 
 ## AUR：`pory-bin`
 
-`aur/pory-bin/PKGBUILD` 是**唯一真相**；AUR 上的 `pory-bin` 仓库只是它的一个副本。
+`aur/pory-bin/PKGBUILD` 是**唯一真相**。**目前尚未发布到 AUR**（没有 AUR 账号）；
+将来发布后，AUR 上的 `pory-bin` 仓库只是它的一个副本。下面的推送步骤留作发布时使用。
 
 ### 为什么是 `-bin` 而不是源码包
 
