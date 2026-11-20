@@ -63,7 +63,8 @@ direction without flags. Change these values to use another language pair.
 - **Works in pipelines** — translation goes to stdout, status to stderr. Use `--plain` to
   suppress terminal decoration.
 - **Chunking and cache** — long input is split at paragraph/sentence boundaries where
-  possible, and completed chunks can be reused.
+  possible; blank lines, indentation, and sentence spacing are preserved. Chunk size follows
+  the backend that translates it, and completed chunks can be reused.
 - **Shell helpers** — optional aliases and completions for fish, bash, and zsh; `--uninstall`
   removes the integration pory added.
 - **Rust + rustls** — no OpenSSL dependency.
@@ -200,7 +201,8 @@ Issues and pull requests are welcome. A few things that make a patch easy to acc
 
 - `cargo test` and `cargo clippy --all-targets` should both be clean
 - Comments in the source are in Chinese; `--help` text is English only (it is the user
-  interface, and the project deliberately keeps it to one language)
+  interface, and the project deliberately keeps it to one language). Runtime output —
+  footnotes, warnings, and errors — is in Chinese.
 - New features must be **opt-in**: with no configuration, the code path and behavior must
   be identical to before the feature existed
 
